@@ -1,0 +1,1882 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta http-equiv="Cache-Control" content="no-store">
+<meta name="apple-mobile-web-app-title" content="Frict">
+<meta name="theme-color" content="#000000">
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icon-192.png">
+<title>Frict</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fredoka:wght@400;500;600;700&family=Barlow:wght@300;400;700&display=swap">
+<style>
+  *{box-sizing:border-box}
+  html,body{height:100%;overflow:hidden}
+  body{margin:0;background:#000;-webkit-font-smoothing:antialiased}
+  /* Fixed in both orientations, so the box the element is positioned against
+     never changes underneath it. Upright it carries no transform at all: a
+     transformed ancestor invites the compositor to rasterise the canvas at its
+     own chosen scale and then stretch the result. */
+  .screen{position:fixed;top:0;left:0;width:100vw;height:100vh;
+          transform-origin:center;
+          display:flex;align-items:center;justify-content:center;background:#000}
+  @supports (height:1svh){ .screen{ height:100svh; } }
+  /* No will-change or translateZ here. Promoting a canvas to its own 3D layer
+     hands its contents scale to the compositor, which is free to rasterise the
+     texture at a scale of its choosing and stretch it, and that is a soft canvas
+     the page cannot measure its way out of. A canvas gets its own layer anyway. */
+  .screen canvas{display:block;touch-action:none;cursor:pointer;
+    user-select:none;-webkit-user-select:none;-webkit-touch-callout:none}
+  .screen canvas:focus{outline:none}
+  /* Portrait lock. Android obeys the manifest and never reaches this. iOS gives
+     a web page no orientation lock at all, so a phone held sideways gets the
+     whole screen turned back a quarter turn instead. The max-height guard keeps
+     a desktop browser in landscape out of it. */
+  @media (orientation:landscape) and (max-height:600px){
+    .screen{top:50%;left:50%;width:100vh;height:100vw;
+            transform:translate(-50%,-50%) rotate(90deg)}
+    /* Turning the other way has to be answered the other way, or the game reads
+       upside down in one of the two landscapes. */
+    html[data-rot="ccw"] .screen{transform:translate(-50%,-50%) rotate(-90deg)}
+  }
+  @supports (height:1svh){
+    @media (orientation:landscape) and (max-height:600px){
+      .screen{width:100svh;height:100svw}
+    }
+  }
+</style>
+</head>
+<body>
+<div class="screen">
+  <canvas id="game" width="320" height="693" tabindex="0"
+          aria-label="Frict. Press and hold to aim, release to shoot."></canvas>
+</div>
+
+<div id="probe" style="position:fixed;top:0;left:0;width:0;height:0;
+     padding:env(safe-area-inset-top) env(safe-area-inset-right)
+             env(safe-area-inset-bottom) env(safe-area-inset-left);
+     visibility:hidden;pointer-events:none"></div>
+<div id="corner" style="position:fixed;top:0;right:0;width:56px;height:56px;
+     z-index:9;background:transparent;touch-action:manipulation;
+     user-select:none;-webkit-user-select:none;-webkit-touch-callout:none"></div>
+<pre id="vpread" style="position:fixed;top:0;left:0;right:0;z-index:10;margin:0;
+     display:none;padding:56px 10px 10px;background:rgba(0,0,0,.92);color:#00d000;
+     font:12px/1.45 ui-monospace,Menlo,monospace;white-space:pre-wrap;
+     touch-action:manipulation"></pre>
+<script>
+(function(){
+  var scr = document.querySelector(".screen");
+  var turned = window.matchMedia("(orientation:landscape) and (max-height:600px)");
+  var panel = document.getElementById("vpread");
+  var probe = document.getElementById("probe");
+
+  /* The element is rotated a quarter turn in landscape, so its own width runs
+     down the screen's height. Measure the viewport, then hand the two numbers
+     over in whichever order this orientation wants them. */
+  function fit(){
+    var w = window.innerWidth, h = window.innerHeight, t = turned.matches;
+    scr.style.width  = (t ? h : w) + "px";
+    scr.style.height = (t ? w : h) + "px";
+    if (panel.style.display === "block") report();
+  }
+
+  function unit(u){
+    var d = document.createElement("div");
+    d.style.cssText = "position:fixed;top:0;left:0;width:1px;visibility:hidden;height:100" + u;
+    document.body.appendChild(d);
+    var v = d.getBoundingClientRect().height;
+    d.remove();
+    return Math.round(v * 100) / 100;
+  }
+
+  function box(el){
+    var r = el.getBoundingClientRect();
+    return Math.round(r.width*100)/100 + " x " + Math.round(r.height*100)/100 +
+           "  at " + Math.round(r.left*100)/100 + "," + Math.round(r.top*100)/100;
+  }
+
+  function report(){
+    var cs = getComputedStyle(probe);
+    var cvs = document.getElementById("game");
+    var mode = ["standalone","fullscreen","minimal-ui","browser"].filter(function(m){
+      return matchMedia("(display-mode:" + m + ")").matches; }).join(",") || "none";
+    panel.textContent = [
+      "build    0.2b translucent",
+      "inner    " + window.innerWidth + " x " + window.innerHeight,
+      "screen   " + screen.width + " x " + screen.height,
+      "avail    " + screen.availWidth + " x " + screen.availHeight,
+      "docEl    " + document.documentElement.clientWidth + " x " +
+                    document.documentElement.clientHeight,
+      "dpr      " + window.devicePixelRatio,
+      "vh/svh/lvh/dvh  " + unit("vh") + " / " + unit("svh") + " / " +
+                           unit("lvh") + " / " + unit("dvh"),
+      "safe T/R/B/L    " + cs.paddingTop + " / " + cs.paddingRight + " / " +
+                           cs.paddingBottom + " / " + cs.paddingLeft,
+      ".screen  " + box(scr),
+      "canvas   " + box(cvs) + "   buffer " + cvs.width + " x " + cvs.height,
+      "standalone " + (navigator.standalone === undefined ? "n/a" : navigator.standalone) +
+        "   display-mode " + mode,
+      "orientation " + (screen.orientation ? screen.orientation.type : "n/a") +
+        "   turned " + turned.matches
+    ].join("\n");
+  }
+
+  function toggle(){
+    if (panel.style.display === "block") panel.style.display = "none";
+    else { report(); panel.style.display = "block"; }
+  }
+
+  /* Two ways in, because a double tap can be eaten by the zoom gesture and a
+     long press can be eaten by a text callout, and neither is worth a second
+     round trip to find out. */
+  var last = 0, held = null;
+  var corner = document.getElementById("corner");
+  corner.addEventListener("pointerdown", function(e){
+    e.preventDefault(); e.stopPropagation();
+    held = setTimeout(function(){ held = null; last = 0; toggle(); }, 700);
+    var now = Date.now();
+    if (now - last < 1200) { clearTimeout(held); held = null; last = 0; toggle(); }
+    else last = now;
+  }, true);
+  function letGo(e){
+    if (held) { clearTimeout(held); held = null; }
+    if (e) { e.preventDefault(); e.stopPropagation(); }
+  }
+  corner.addEventListener("pointerup", letGo, true);
+  corner.addEventListener("pointercancel", letGo, true);
+  panel.addEventListener("pointerdown", function(e){
+    e.preventDefault(); e.stopPropagation(); panel.style.display = "none";
+  }, true);
+
+  fit();
+  addEventListener("resize", fit);
+  addEventListener("orientationchange", function(){ setTimeout(fit, 60); setTimeout(fit, 400); });
+  if (turned.addEventListener) turned.addEventListener("change", fit);
+})();
+</script>
+<script>
+window.PORTRAIT_LOCK = true;
+(function(){
+  /* screen.orientation.angle counts counter-clockwise from the device's natural
+     orientation, so 90 means the phone was turned counter-clockwise and the
+     page has to turn back the same way. */
+  var el = document.documentElement;
+  function set(){
+    var a = 0, so = window.screen && screen.orientation;
+    if (so && typeof so.angle === "number") a = so.angle;
+    else if (typeof window.orientation === "number") a = ((window.orientation % 360) + 360) % 360;
+    el.setAttribute("data-rot", a === 90 ? "ccw" : a === 270 ? "cw" : "none");
+  }
+  set();
+  var so = window.screen && screen.orientation;
+  if (so && so.addEventListener) so.addEventListener("change", set);
+  window.addEventListener("orientationchange", set);
+  window.addEventListener("resize", set);
+})();
+</script>
+<script>
+const A={"arrow": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAB4AAAA4CAYAAADqxUiJAAAB9ElEQVR4nO2X0XGDMAyGf3p9jzcoG8QbwAYdId2g3aAj9DpBuknpBHEnCJkg7gTuA2BsEEYmJk/8Pt/pbKEP6SyTAJu4MjjB4Hhv6BHGjjvBfWg3Pu4HvbazH4e1oAcPum/nqnAKinYWo7IngrtQM4B28zCCF7dC94NcxlAa3tTlBuiVBU0GH0JfGdBuvi+FG+w86DEC2k2/088w2A0xDyMoUAEQAAAF4AuIKtgBQA1A25UcQEXB3UxPo/NpYPAdke2ZjGDa2AS8CT89uODwOHW4zGYLSKIOL+1siv83WeBGT2jK3OgNGT5nnpiQwbN914KRbeFlF7xEHkKbcI+IYLyonHg2GpzhZyIoLeE9+7sc7Cpn+Ehr1XOuHHDFBou0YM0Gl2nBig3ulQSsrRW6Ov3mUSnAfRAR8PL3dApwbS0Z8PL31O3gDBdri4Cfu5fNXq7sPq4BuKd2LGmtihMwDhxSzowUCVYAwhn34ColWFuL+h3ht5kmPBaDlbUksSsmfBOAtbVyYtd/GU14LAS7n0cKLDzf4OcwDuyKApfWqrlhYsDVJLjXKmANgD5cpbXUGuAmqBis+u2l1wDX1nL7Vno+al2wcFaF56PXBZfOqnRst+1m9MjGZrjAEOBy7JpeU3/qur92EYq9QPTCvU2bNm3atFz/L8x48geuIN0AAAAASUVORK5CYII=", "pop_original": "data:audio/mpeg;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAADTGF2ZjYwLjE2LjEwMAAAAAAAAAAAAAAA//NwwAAAAAAAAAAAAEluZm8AAAAPAAAADQAACKsAJiYmJiYmJjk5OTk5OTk5S0tLS0tLS0tdXV1dXV1db29vb29vb2+BgYGBgYGBgZOTk5OTk5OlpaWlpaWlpbe3t7e3t7e3ycnJycnJydvb29vb29vb7u7u7u7u7u7/////////AAAAAExhdmM2MC4zMQAAAAAAAAAAAAAAACQCXQAAAAAAAAirb6DWfwAAAAAAAAAAAAAAAAD/82DEABNIhmgXRkgAVpuSkEPZMmTJkyBAghh5MnRMnpgIAAAgeFCTF0bYEBMHwfB8/4EBAEAQ/g+//z/Lh/+Ud3//4gAH+D7/qBAEPlwfB8P/KAgCAIO/Lg+qbhJAAAG3977cjkkUoY9QYNwNZCycD4QlTJI5DIJ0JE1LwNzwbrhfc1AcJAsAIsKkK1ACQEFPgVlhp5MAYEYNIiL/82LEQS9ztr43j6ACQAZgnDcZkmSWUTRma0GIOT5vKBSHkuykak+gtNNBqCmk0bGybFIyUXlMgz9TF84mZopus3IctmSWuxiVzRP/wxUZmiTro1JHUR2l503U+oyRR1pvqVfTToVukvdSpka2eg66vqX1MhQ/oNf0TYxMUnW1WpNFI4mgmIgo/66spAAAYt2m3/rVDiUJeshltll5//NixBMkQyrCf8xYAzJ/rHjMXCSZrkwpBPAVBBANEC1b/9u5zv9jIhRZQzLjrvfT7h7dcpKEoTa3tzSxWWO4NqXbU1+3/rlvNItJO5v1X8RUt64d8Nit96LZLWsqevq+27aqqm+XxcXUzHc3wgfdnXTcakNqEQjsM/sFrMxx2vf+QqiFAsB7Wf8jmhUpvnNQIsZfrHGqLGcNPh14pP/zYsQSI1IybA7Gysgp9ioNmaS4mQxDMQDlAMHzHx4wAbBReHYwGyDoDM0doMNOxpFLrv/Yz3rv/8YIQHUBRomIAxoxXE1ZBSjojI6Ja6iB9DOs6tq3qyUtMKFHISK/NyszcWHFFZJjXyNKCBRuLqDUVwcXoacBGNe2u8sJe5rzuupI04IBQcRqBbCtehlmzuKaJ+NDTQX+neLAKbj/82DEFCPJ0mQE2pEEEAQyDqxsNDEcyoSFAcw0KALqcEfGsgQUNzQCg3UwO8kDYG41pAM4JQYFAXM///xqOOCEKniGu46RIfQrjxyyykUtbaN18xxcLfzNf6EEwyDAeFhUWS/69aQcHMIzYA0rv1PXhueCCbDyhr9jaqSfcoi1TDCXCJMsk0SK1VWw7TNZVRYjAbDAwmu1NJuTxO7/82LEEyJJvmQE0dEENxdVXUaLpsEGAYQABpozCkFZS9RijZgExn4g7mMEINMOdcMuyf/6YwXQIRCQYLeqkoJzFHb1fA2km5mLa9K7m4i3SUru5kY9GKBBLPGcPAMhEAEecFVhsRkltzA8HRUeepQoeoiHmqcSWhP+O20OlL6EKXNoiyogAB1tXl3WD5eenIgnzRkZHQTASJ0b6u67//NixBkd6QppjGYGqCzlW1cKJwXAddAoIhUbTGMgsKWgBYoQHb+mcsY6sWMwUsrROPAQVKnXnVBU6ecoedfUBdTzx2HWsUdPVneFQaaPcqSehrIdaL97UkhDs7cFbpHxFERUSlgLJ1FYiEtFAlFRuSQR1mDIPW3Gry8erUA0AoCki4ZiKWjy31YUyQ4CvFRCIzBV5Z8RLWwyEyw40//zYsQxE3CmTF4KQHRhM6NQN+uw1kYsj6d1WaRXWWK9f/Zs6OytN+q/oUJqAornLuM0XW/ly4yge/VrrRKEYVAOEIGwNjYJR93zk9OhyOrdmqqXs6xjCqyGlhsSgqIgqiIjVYaYWTzzw6s6JTtZ0FcOtkqw0WPSwdK8NeeTqBoGoNV/BoGj0NlVuOg0sY8N1A1WEwmEj2IlKjKrKrL/82DEcxuI/ggEKwY8aS7BoVCkRDIeGxAKxwSioQjQfGBGKCc+hRKpJqLqQurq61lCiVLHTi6BtpCsqCBhA4Qi/1EiDCRQGIFkB4UAQYSBCxBMgpI04so8yz//4BCoqKhkCioqKs8FhYWEgGBYWFgcdxcVFRUMgyFRWkxBTUUzLjEwMKqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqr/82LEkxwhjMAISI1gqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqTEFNRTMuMTAwqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq//NixG8AAANIAAAAAKqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqkxBTUUzLjEwMKqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqv/zYsRvAAADSAAAAACqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqkxBTUUzLjEwMKqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqr/82DEcAAAA0gAAAAAqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqo=", "tap_original": "data:audio/mpeg;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAADTGF2ZjYwLjE2LjEwMAAAAAAAAAAAAAAA//NwwAAAAAAAAAAAAEluZm8AAAAPAAAABwAABP8AQ0NDQ0NDQ0NDQ0NDQ0NjY2NjY2NjY2NjY2NjY4KCgoKCgoKCgoKCgoKCoaGhoaGhoaGhoaGhoaGhwcHBwcHBwcHBwcHBwcHg4ODg4ODg4ODg4ODg4P//////////////////AAAAAExhdmM2MC4zMQAAAAAAAAAAAAAAACQCpQAAAAAAAAT/j6f7lwAAAAAAAAAAAAAAAAD/82DEABJgMpQ/QxgAKknJbs7nEREEAYG4fiAHwfB8HyhzghBD8HwfB/8EHfwfP/wQBAEDnwfPn/wQBAEDnwfB8H/wQBAMfg+D4Ph/4IAgCAYT9YPv+YUAANQk5xt0OFxKgUgIZILM7ZWBRKYWXUNq3NPDA2c4Zh10kqbO8oBHzMAUQlF8goxwsJAybFwB+ob+QEZkc2mgCqwNRAD/82LERTGC+oG/nJgB0pcSHSMcOAv0BcQHCwXYLjFzC5jM0IdRZJhTwbvC6kbg6TEul3MTI8fRu6hZolQogy5NGkvF5bGSJdLqTataLFwzDLBFTc6ZIGqRiZF4vLYyMS6XVV//n0CGEgRcn0TeTBdOn1qSS1LRR1qSS//+Ro0hOhLoMdWjCY/wQW1QVekFD/lpy27jclXi5i6nuQFO//NixA8jm4K0/9pAAzjo4yEE5A0BLlEdRGISeknfh6DMcOynZJyMIraU1UITB0H1/4s9OgSiAGxI33//DNYsIsXUHLV007sMoQjUZUOcwedKtljjpZ9v/3JKG5JA+xWFS6/9lT5rVpr/r5Xrn1q6X7WLVWJvUSC444krq1q9Y7lW7i/nXEoexDNOxMLqZBZgYAJgKF5hYFaCAxUCE//zYsQQIlmuYALrzJoViFBQYmbA7Hp3FnCctGAIIgoMwKAzvhDjiTzKiDfP86VDZNqQ4SQoYzwc6u1vWHanybxEot3n235ILErjJnyxLSdElkbd9iX5UEl8p0eDJeEcMzt7KciaVLSzmnX+ZlRcxZUpUTS4ECgQhOwVcyVpSoqGYFJOSl39dQtczhS5twMMrPJABX5IGmUNJyfUPuz/82DEFiJRLmQM2waVacPkREgNbYtB4SyuVikWyEfLzRLxtEjaq+kh76XZWKl0u3Y2KoYIeQWj5I5qcrWBf4P+9+6J2ZB0FIfHtnbTRQt7LwP2iwz2aVwPQY+qdnqcyRMD1KkZG5Kp0dW0Oi5xYWBzo4NUySpUxUjo///tmf//9VVSvVXybhhMZWdClxkTVDhUSYZYMCtTLwrpnav/82LEGx2h/kw0wYq4YBKtEsAqSotHcoFUSZ4rs6J2PLenI85cs881mvKfNmqXL6iowDOoqhTFINFU9blR20M5UMYtSotxF0wV1gqWF0nWhUKBUqAhcyMKkfnes7Oq+RqPctts4wid2IUhVzNhZ426grRmLlxQSYVQXfTMbdtF/LFaU8YDCA4Sdrd6Lx2JLBYmcJHQFAKH7AxmaMdL//NixDQcKQHkCsGGrGrBgcAoVcSCrgEBlCUOgq3H9/jAmAkAUVJHisKBV39DHAVqgKImwk9aJ46FB5GEvqArPLQqM89WIiRE71pMQU1FMy4xMDCqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqg==", "pop_tight": "data:audio/wav;base64,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1v/c/+P/6//z//v/AwALABMAGwAhACcAKwAuADEAMAAwAC4AKgAlAB8AGAASAAoAAgD7//T/7f/m/+H/3P/Z/9b/1f/W/9f/2f/d/+H/5v/t//P/+v8AAAYADAASABgAHAAgACIAJAAkACQAIwAgAB0AGQAUAA8ACgAEAAAA+v/0//D/6//o/+X/4//i/+H/4v/j/+b/6f/s//D/9f/5//7/AQAGAAoADgARABQAFgAXABcAFwAXABUAFAARAA8ACwAHAAQAAAD+//v/+P/0//L/8f/w/+//7v/u//D/8f/y//T/9//5//z///8BAAQABQAIAAoACwAMAA0ADQANAA0ADAALAAkABwAFAAMAAgAAAP7//P/7//r/+f/4//f/9//3//j/+P/5//r/+//9//7///8AAAEAAgAEAAUABQAGAAYABgAGAAUABQAEAAQAAwACAAEAAAAAAP///v/+//3//P/8//z//P/8//3//f/+//////8AAAAAAAABAAIAAgADAAMAAwADAAMAAgACAAIAAQAAAAAAAAD//////v/+//3//f/9//3//f/9//7//v/+////AAAAAAAAAQABAAIAAgADAAMAAwADAAMAAwADAAMAAgACAAEAAAAAAAAA//////7//v/9//3//P/8//z//P/9//3//f/+//////8AAAAAAAABAAIAAgADAAMAAwADAAQABAADAAMAAwACAAIAAQABAAAAAAAAAAAA//////7//v/+//7//v/+//7//v/+/////////wAAAAAAAAAAAAAAAAAAAQABAAEAAQABAAEAAQABAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=", "tap_tight": "data:audio/wav;base64,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HQAkACsALgAxADQANQA3ADYAMwAxAC0AKAAiAB0AFgAQAAgAAgD9//X/7//p/+P/3//b/9n/1v/U/9T/1f/W/9j/2//f/+P/6P/s//P/+P/9/wIABwANABEAFgAZABwAHwAiACIAIwAiACEAHwAdABoAFwATAA4ACgAGAAIA/v/6//b/8v/u/+v/6f/n/+b/5f/l/+X/5v/n/+n/7P/v//L/9v/5//z/AAADAAYACQAMAA4AEQATABUAFgAWABYAFQAVABMAEQAQAA4ACwAIAAYAAwAAAP7/+//4//b/9P/y//H/8P/v/+//7//w//D/8f/z//X/9v/4//v//f///wEAAwAFAAcACQALAAwADQAOAA4ADgAOAA0ADAALAAsACAAHAAUAAwABAAAA/v/9//v/+f/4//f/9v/1//X/9f/1//X/9f/2//f/+f/6//v//f/+/wAAAAABAAMABQAFAAcACAAIAAkACQAJAAkACQAIAAcABgAFAAQAAwACAAAAAAD///7//f/7//r/+v/5//n/+P/4//j/+P/5//r/+v/7//z//f/+////AAAAAAEAAgADAAQABQAFAAYABgAGAAYABgAGAAYABQAFAAUABAADAAIAAQAAAAAA//////7//f/9//z//P/8//v/+//7//v//P/8//3//f/+//////8AAAAAAAABAAEAAQACAAIAAwADAAMABAAEAAQAAwADAAMAAgACAAEAAQAAAAAAAAAAAAAA/////////////////v/+/////////////////wAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=", "over_original": "data:audio/mpeg;base64,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I1LAHlYOHBJAu6dLBlmTwKNbKiWtOSwGZep9OuzKUbR5CgBI5nSbdNAjAzhoXDgFNRdBOzVk1Z//8SKtiKOW6l2XxiBT///7/1VUECQ4GAAhzh0IVEPpf//8GYhVuQ6JnQhyEU7Sff/+7JkQOKYYxhBQE4gQZaoAkYBK3+pVdRBJ6PqOxiI6Ria0wsGqtFAx+B0Eikri0v/zYsSbHpNSuL7CBQ0o5evl3URipYWC4LVqOheACGivljybMF0+VP/+TpEoeCEK60qSY7VBXGA3///W3QzGHYOQKEAAJ3FCAxkwDaTn/JtFTalngqPKpb/2no40DY8s9rf/5wRgcH4AQpOf6qevVGhaMZRUaE/wtKPOvLuKPyaGm2eJi2UzPS9SphyaCZbivpCnSlAAlfK0HWNbZTL/82DEsB5x6rRWwgUMr8Kk1AiT6qYXs3M7iX+Rv7Vq2W5lHOIiowDjRpZUd1ZGUgj//+jmYiHajUczynQRGjTV///q1K7KxSkeX///sj9CFJicUVUKUAFz81Eo2hyVvkwVM80xLKVkPzKnULl7rYtZeOKOEvmWK3tEBXofcSrOtOvvpc//lKVpcyDqhKO/JD1h4PONqV3xNRhyCzv/82LExR8b1rAewcsNDv87dHqXXu5y31KUx2UqSOU16tX//9aGpTeuyKGHmRn+ysfIvPMT+llJJIpUHSxlTEFNRTMuMTAwVVVVTwkycnqMZjmMpIowIcWGqmcm1OrLMrVy6Vza2GkdTGT0Qov5LXhzKIDAJhHP3nK8kUUWIlYRbQPCwiAIt9Spl0FlAUW+kvMLFdywV4iDoiAoaDoL//NixNgd8qqgNsIFKB4NA1/6cseWGgaEo8FQ1/4meoOgqJRE/1PsiVwldiVxVSmOwFGTVBxi3KBSp1aVBmyLeSJSOT3TUFhFkQuggEX7RFS+YWvRJItiITFQSC6TKYS0XQedprhQZF4rTFqJCTIq3EwpIg+MFG2SqpK3sYlByWGilBpktCWVFUiul2TlRTBMxWVFdiYrb5WJimisoP/zYsTkHSF+hBZ5iwTSorv9uUktVMVlJiSUwTMVVJXY1ZFSqSWKLFdkpSWu+VVJJaliqImiJLFVTEFNRTMuMTAwVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVX/82DE/yZg5gQCwZMhVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVU=", "over_bubble": "data:audio/mpeg;base64,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qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqr/+3LEbQPAAAGkAAAAIAAANIAAAASqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqkxBTUUzLjEwMKqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqv/7cMRtg8AAAaQAAAAgAAA0gAAABKqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqo="};
+(function(){
+"use strict";
+
+/* ---------------------------------------------------------------- config */
+/* 320 x 693 is 0.4618, an iPhone 13 mini's screen scaled to a 320-wide field,
+   and every current iPhone is within half a percent of it. The field never
+   changes shape; it is scaled to whatever the window offers and centred. In
+   Safari the browser chrome takes about 183pt of height, so it fills the height
+   and leaves bars at the sides. Add to Home Screen removes the chrome and it
+   fills the screen exactly. */
+const W = 320, H = 693;
+function V(n){ return n * (H / 480); }
+const FOOT = 45;                 // launch point, measured up from the bottom
+const ARROW_DROP = 70;           // launch point below the dashed line
+function layout(){
+  P.launch   = H - FOOT;
+  P.baseline = P.launch - ARROW_DROP;
+}
+const TOP = 48;                  // where the rule is drawn
+const TOP_LINE = 1;              // its thickness, in field units
+const SIDE = 1;                  // side inset, same idea as the rule's underside
+const POP_PULL = 0.65;           /* score marker sits this far out along the
+                                    impact normal, 1 = the surface, 0 = the
+                                    centre. Kept off the rim, where the shot
+                                    ball and the neighbours crowd it. */
+/* A ball's ring is stroked so its outer edge lands exactly on its radius. With
+   the walls at 0 and 320 that edge sat on the canvas boundary and the outermost
+   antialiased pixel was clipped, worse on the right, where x=320 maps one past
+   the last pixel column. Insetting by 1 keeps the whole ring on screen. */
+/* The rule occupies TOP to TOP+TOP_LINE and balls bounce off its underside,
+   the same relationship the side walls have with FIELD_L and FIELD_R. Thinning
+   the rule from two units to one therefore leaves the physics untouched: it is
+   drawn half a unit lower and its inner face is still at 49. */
+const FIELD_TOP = TOP + TOP_LINE;
+const FIELD_L = SIDE, FIELD_R = W - SIDE;
+const RAZOR_SCALE = 1.1;         // the blade is 20% wider than a plain ball
+const SHOT_R = 14;               // fixed; no longer a dial
+const SCORE_PX = 37;             // foot score size
+const SCORE_BASE = 26;           // its baseline, measured up from the bottom
+const ARROW_GAP = 5;             // clear air between the ball and the arrow tail                  // notch clearance: 50pt on a 13 mini, 59pt on a Dynamic Island phone
+/* Calibration, fixed. These are the values arrived at by hand; the tuning
+   panel that produced them is not part of this build. The dashed line and the
+   launch point are derived from the field height, so they hold their distance
+   from the bottom of whatever window this runs in. */
+const P = {
+  speed:     420,    // launch speed, px/s
+  friction:  0.6,    // fraction of speed kept per second
+  bounce:    0.92,   // speed kept per wall or ball impact
+  stopAt:    5,      // below this the ball is considered at rest, px/s
+  gripAt:    70,     // speed under which friction starts to bite harder, px/s
+  grip:      0.30,   // friction multiplier at a standstill; 1.00 disables it
+  /* Settled. There is no tuning panel any more and nothing reads a saved set,
+     so these are the numbers the game plays at, on every device, always. */
+  growTime:  0.50,   // seconds to reach final size once at rest
+  sweep:     100,    // arrow rotation, degrees per second
+  aimDelay:  0.03,   // dead time after a press before the arrow moves
+  startBalls: 0      // balls on the field at the start of a game
+};
+layout();
+
+const store = {
+  get(k, d){ try { const v = localStorage.getItem("frict."+k); return v===null?d:JSON.parse(v); } catch(e){ return d; } },
+  set(k, v){ try { localStorage.setItem("frict."+k, JSON.stringify(v)); } catch(e){} }
+};
+
+
+/* ---------------------------------------------------------------- assets */
+/* arrow.png traced to an outline, in coordinates relative to the ball's centre:
+   base at y -21, tip at -64.3. ARROW_DY slides it so the base always clears the
+   ball by ARROW_GAP whatever SHOT_R is. Drawing it as a vector also removes the
+   last raster; a small high-contrast sprite crawls at its edges as it turns,
+   which reads as stutter even at a clean frame rate. */
+const ARROW_PATH = new Path2D("M-5.6 -35.2C-7.5 -49.2 -7.6 -49.5 -10.1 -50.0C-12.7 -50.5 -12.7 -50.6 -6.4 -57.4L-0.1 -64.3L6.3 -57.4C12.7 -50.6 12.7 -50.5 10.0 -50.2L7.3 -49.9L5.5 -35.4L3.7 -21.0L0.0 -21.0L-3.6 -21.0L-5.6 -35.2ZM3.4 -37.6C4.4 -45.2 5.7 -51.8 6.2 -52.1C6.8 -52.5 5.7 -54.4 3.6 -56.6L-0.0 -60.5L-3.6 -56.6C-5.6 -54.5 -6.8 -52.5 -6.2 -52.1C-5.7 -51.8 -4.5 -45.7 -3.6 -38.5C-1.6 -23.5 -1.4 -22.7 0.3 -23.2C1.0 -23.5 2.2 -28.8 3.4 -37.6Z");
+const ARROW_BASE = 21;
+/* Score numerals are set in Barlow. NUMCAP is its cap height as a
+   fraction of the font size, used to centre digits inside the score rings. */
+const BARLOW  = '"Barlow",Helvetica,Arial,sans-serif';
+const FREDOKA = '"Fredoka","Trebuchet MS",sans-serif';
+const NUMCAP  = 0.71;   // Barlow digit cap height, measured from the rendered face
+
+let actx = null; const BUF = {};
+/* Two complete sets of the three sounds. Original is the bundle's own; bubble is
+   the recorded pair sharpened to land on the hit, with the two-beat ending. */
+const SCHEMES = [
+  ["original", "pop_original", "tap_original", "over_original"],
+  ["bubble",   "pop_tight",    "tap_tight",    "over_bubble"]
+];
+let scheme = store.get("scheme", 0);
+if (!(scheme >= 0 && scheme < SCHEMES.length)) scheme = 0;
+function clipKey(name){
+  if (name === "pop") return SCHEMES[scheme][1];
+  if (name === "tap") return SCHEMES[scheme][2];
+  return SCHEMES[scheme][3];
+}
+function setScheme(){
+  scheme = scheme ? 0 : 1;
+  store.set("scheme", scheme);
+  /* The tap of whichever set was just chosen, and only that: the button is
+     marked quiet so the usual menu click does not fire underneath it in the
+     set being switched away from. */
+  play("tap", 0.5);
+}
+
+function audioInit(){
+  if (actx) return;
+  const AC = window.AudioContext || window.webkitAudioContext;
+  /* "interactive" asks for the smallest buffer the platform will give. Some of
+     the delay between a hit and the sound is the device's own output latency,
+     which a web page cannot remove; this asks for as little of it as possible. */
+  try { actx = new AC({ latencyHint: "interactive" }); }
+  catch(e){ try { actx = new AC(); } catch(e2){ return; } }
+  setTimeout(decodeClips, 0);   // base64 -> ArrayBuffer, not inside the press
+}
+/* Bubble 1 is the pop (a ball leaving the field); bubble 2 is the tap (menus
+   and a ball surviving a hit); two copies of bubble 1, a fifth apart and 125 ms
+   apart, end the round. Both bubbles
+   are cut back to the zero crossing before their loudest sample, raised a tone,
+   given a short burst of their own derivative on the front and a fast decay, so
+   each one is at full level within a quarter millisecond and gone in under
+   thirty. The ear times an impact by where the waveform jumps and by how long
+   it rings; a bubble that swells and then hangs reads as late even when it
+   started on time. Nothing on release. */
+function decodeClips(){
+  if (!actx) return;
+  /* Every scheme is decoded up front, so switching between them is instant. */
+  Object.keys(A).forEach(function(key){
+    if (key.indexOf("pop_") && key.indexOf("tap_") && key.indexOf("over_")) return;
+    const bin = atob(A[key].split(",")[1]);
+    const arr = new Uint8Array(bin.length);
+    for (let i=0;i<bin.length;i++) arr[i] = bin.charCodeAt(i);
+    actx.decodeAudioData(arr.buffer, function(b){ BUF[key] = b; }, function(){});
+  });
+}
+let soundOn = store.get("sound", true);
+/* Walls are a drawing of where the boundary already is, not a change to it, so
+   they are safe to leave off on a phone where the screen edge is obvious and on
+   where a letterboxed desktop window gives you nothing to judge by. A laptop
+   reports its trackpad as the primary pointer even when the screen is also a
+   touchscreen, so this lands right on a touchscreen laptop too. */
+function wallsDefault(){
+  try { return window.matchMedia("(hover: hover) and (pointer: fine)").matches; }
+  catch(e){ return false; }
+}
+let wallsSet = store.get("walls", null);
+let wallsOn = (wallsSet === null) ? wallsDefault() : !!wallsSet;
+function play(name, vol, delay){
+  const key = clipKey(name);
+  if (!soundOn || !actx || !BUF[key]) return;
+  /* A suspended context does not advance its own clock, so anything started
+     against it sits there and fires whenever the context next wakes, which is
+     usually the following press. That arrives as a hit sound from several
+     seconds ago. Better to lose the sound and wake the context for the next
+     one. */
+  if (actx.state !== "running") { try { actx.resume(); } catch(e){} return; }
+  try {
+    const s = actx.createBufferSource(); s.buffer = BUF[key];
+    const g = actx.createGain(); g.gain.value = vol===undefined?0.7:vol;
+    s.connect(g); g.connect(actx.destination);
+    /* Scheduled against the audio clock rather than a setTimeout, so the wait
+       is exact and does not drift with whatever the main thread is doing. */
+    s.start(delay ? actx.currentTime + delay : 0);
+  } catch(e){}
+}
+
+/* ---------------------------------------------------------------- canvas */
+const cvs = document.getElementById("game");
+const ctx = cvs.getContext("2d");
+let q = 1;
+/* Sizing is measured only when the element actually changes size. Reading
+   getBoundingClientRect inside the animation loop forced a synchronous layout
+   of the whole page on every frame, which is what made this stutter. The
+   backing store is capped at 2x: past that the extra pixels cost real
+   fill rate and buy nothing visible on flat vector art. */
+/* iOS gives a web app no way to lock the orientation: screen.orientation.lock
+   is unimplemented in Safari and the manifest's orientation field is ignored.
+   The deploy build therefore turns the whole screen a quarter turn in CSS when
+   a phone is held sideways, so the game still presents as portrait. That makes
+   two things wrong here unless they are handled: getBoundingClientRect returns
+   the rotated bounding box, with width and height swapped, and pointer
+   coordinates arrive in screen axes rather than the canvas's own. */
+const ROT_Q = (window.PORTRAIT_LOCK && window.matchMedia)
+  ? window.matchMedia("(orientation: landscape) and (max-height: 600px)") : null;
+function rotated(){ return !!(ROT_Q && ROT_Q.matches); }
+/* Which way the page turned. The page itself is always upright to the eye, so
+   to keep the game glued to the phone's own frame the turn has to cancel the
+   device's: screen.orientation.angle is counter-clockwise from natural, so 90
+   is answered with a CSS rotate(-90deg) and 270 with rotate(90deg). The deploy
+   page sets data-rot; -1 here means the -90 case. */
+function rotDir(){
+  if (!rotated()) return 0;
+  return document.documentElement.getAttribute("data-rot") === "ccw" ? -1 : 1;
+}
+if (ROT_Q) {
+  const onRot = function(){ remeasure(); };
+  if (ROT_Q.addEventListener) ROT_Q.addEventListener("change", onRot);
+  else if (ROT_Q.addListener) ROT_Q.addListener(onRot);
+}
+function measure(){
+  /* clientWidth and clientHeight are the box before any transform, which is the
+     one the canvas has to fit into. */
+  const host = cvs.parentNode;
+  const box = { width: host.clientWidth, height: host.clientHeight };
+  if (!box.width || !box.height) return;
+  /* Fit the fixed field into whatever the window offers, then pin the buffer to
+     whole device pixels and derive the CSS size back from it. Sizing the other
+     way round leaves the canvas on a half device pixel and every crisp edge
+     shimmers as things move across it. */
+  const dpr = window.devicePixelRatio || 1;
+  const scale = Math.min(box.width / W, box.height / H);
+  /* Whole device pixels in the buffer, and, where the ratio is a whole number,
+     a whole number of CSS pixels in both directions as well. A layer sitting on
+     a fractional CSS size gets snapped to the pixel grid by the compositor and
+     its texture stretched to suit, and that is a soft canvas no amount of
+     re-measuring will fix.
+
+     320 by 693 cannot be both exact and whole at these sizes, so the height is
+     rounded to the nearest whole CSS pixel. That is at most half a pixel, a
+     shape error under a tenth of a percent, and the drawing still uses one
+     uniform scale so nothing is stretched. */
+  let bw, bh;
+  if (Math.abs(dpr - Math.round(dpr)) < 1e-6) {
+    const d = Math.round(dpr);
+    let cw = Math.max(1, Math.floor(W * scale));
+    let ch = Math.round(cw * H / W);
+    if (ch > Math.floor(box.height)) { ch = Math.floor(box.height); cw = Math.round(ch * W / H); }
+    bw = cw * d; bh = ch * d;
+  } else {
+    bw = Math.max(1, Math.round(W * scale * dpr));
+    bh = Math.round(H * (bw / W));
+  }
+  const qq = bw / W;
+  cvs.style.width  = (bw / dpr) + "px";
+  cvs.style.height = (bh / dpr) + "px";
+  q = qq;
+  if (cvs.width === bw && cvs.height === bh) return;
+  cvs.width = bw; cvs.height = bh;
+}
+/* iOS reports the new size before the rotation has finished settling, so a
+   single measurement taken on the event can be of a box that no longer exists a
+   frame later. Measure now, again on the next frame, and once more after the
+   animation is certainly over. ResizeObserver catches a box that changes size
+   but not one that only moves, which is why this exists as well. */
+let settleT = 0;
+function remeasure(){
+  measure();
+  requestAnimationFrame(measure);
+  clearTimeout(settleT);
+  settleT = setTimeout(measure, 320);
+}
+window.addEventListener("resize", remeasure);
+window.addEventListener("orientationchange", remeasure);
+if (window.visualViewport) window.visualViewport.addEventListener("resize", remeasure);
+if (window.ResizeObserver) new ResizeObserver(measure).observe(cvs.parentNode);
+
+/* The buffer is sized from devicePixelRatio, and on iOS that value is not always
+   settled when the page first measures. Measure at the wrong instant and the
+   canvas ends up at a fraction of the resolution it should be, which the browser
+   then scales up: the picture goes soft and stays soft, because nothing changed
+   size afterwards to trigger another measurement. Two defences. */
+
+/* One: watch for the ratio itself changing. A media query pinned to the current
+   value stops matching the moment it moves. */
+let dprQ = null;
+function onDpr(){ remeasure(); watchDpr(); }
+function watchDpr(){
+  if (!window.matchMedia) return;
+  if (dprQ && dprQ.removeEventListener) dprQ.removeEventListener("change", onDpr);
+  dprQ = window.matchMedia("(resolution: " + (window.devicePixelRatio || 1) + "dppx)");
+  if (dprQ.addEventListener) dprQ.addEventListener("change", onDpr);
+  else if (dprQ.addListener) dprQ.addListener(onDpr);
+}
+watchDpr();
+
+/* Two: check that the buffer still matches the element at the few moments it
+   could plausibly have drifted without anything firing a resize. That is once
+   shortly after boot, in case the ratio settled late and quietly; on coming back
+   from the background; and on starting a round, which is the last chance to fix
+   it before anyone is looking closely. Not on a timer: every other cause already
+   raises an event this file listens to. */
+function auditSize(){
+  /* The fractional width, not clientWidth: rounding to whole CSS pixels leaves
+     up to a device pixel and a half of slack at a ratio of 3, which would make
+     this fire every second for no reason. */
+  const w = cvs.getBoundingClientRect().width;
+  if (!w) return;
+  if (Math.abs(w * (window.devicePixelRatio || 1) - cvs.width) > 1) measure();
+}
+setTimeout(auditSize, 1200);
+/* H is constant now, so a saved game never needs rescaling on load. */
+
+/* ---------------------------------------------------------------- scenes */
+const SC = { MENU:0, PLAYMENU:1, TUT:2, ABOUT:3, SETTINGS:4, HISCORE:5, GAME:6, OVER:7, CONFIRM:8, PAUSE:9 };
+let scene = SC.MENU;
+let tutStep = 0;
+
+const MENUS = {};
+/* Circle geometry is in the original 320x480 space; y is scaled by V() at load,
+   while r and fs are canvas pixels. A grown button keeps its left and top edges
+   by shifting its centre: dy = dr / VS. */
+/* Centres and radii measured off mainmenu.png in the original bundle, then
+   shifted down as a group to sit in the taller field. Widths are untouched
+   because both are 320 across. r is the outer edge, dr the filled disc inside
+   it, rw the ring's thickness. The @ page is gone and the i is drawn like the
+   question mark rather than filled. */
+/* All four menus in the bundle are built from the same handful of circles, in
+   the same places. Measured once off the artwork and shared, so nothing shifts
+   as you move between screens. Positions are field units, already carrying the
+   62 the whole composition moves down to sit in the taller field. r is the outer
+   edge, dr the filled disc where a slot has one, rw the ring's thickness. */
+const SLOT = {
+  A: { x: 95.5, fy:174.5, r:70.5, dr:54.5 },   // top left
+  F: { x:202,   fy:164,   r:38            },   // small, top right
+  B: { x:200,   fy:288,   r:91,   dr:72   },   // the big one
+  E: { x: 94.5, fy:332,   r:26.5          },   // small, tucked left
+  C: { x:117,   fy:425,   r:71,   dr:55   },   // bottom left
+  /* D sits two units inside both B and C rather than exactly tangent to them,
+     which is the difference between touching and looking like a hairline gap. */
+  D: { x:225.5, fy:414.5, r:40            }    // bottom right
+};
+function slot(k, o){ return Object.assign({}, SLOT[k], o); }
+
+/* Every piece of set text on a menu carries an id, and this is where a nudge
+   against that id lives: dx and dy in field units from where the circle puts
+   it, rot in degrees, fs in pixels, lh as a multiple of the size. The shipped
+   game has an empty table and draws the numbers written in the code. The
+   calibration build fills it from a panel, which is how these get settled
+   without a round trip.
+
+   The registry below is what that panel lists. It is a handful of strings and
+   it keeps the ids honest, so it lives here with them rather than in the rig. */
+const LAY = {};
+function layOf(id){ return (id && LAY[id]) || null; }
+/* What each id was set at in the code, recorded the first time it is drawn, so
+   the panel can show a starting point and put one back. */
+const LAY_DEF = {};
+/* Settled on the layout panel in the calibration build and written back here. A
+   size or an angle replaced the number in the button itself; a nudge has nothing
+   to replace, because the circle is what places the text, so it lives here. The
+   panel overrides these while it is being used and puts them back when it is
+   reset. */
+Object.assign(LAY, {
+  "confirm.reset":   { dy: 3 },
+  "confirm.abandon": { dy: 3 },
+  "confirm.restart": { dx: 1 },
+  "confirm.yes":     { dy: 1 },
+  "over.heading":    { dy: 3.5 },
+  "pause.main":      { dy: -1 }
+});
+const LAY_ITEMS = [
+  ["menu.play",       "MENU",     "play!"],
+  ["menu.high",       "MENU",     "high score"],
+  ["menu.settings",   "MENU",     "settings"],
+  ["menu.info",       "MENU",     "i"],
+  ["menu.help",       "MENU",     "?"],
+  ["title.mark",      "MENU",     "frict"],
+  ["title.sub",       "MENU",     "forever"],
+  ["menu.version",    "MENU",     "version stamp"],
+  ["play.heading",    "PLAYMENU", "play! heading"],
+  ["play.resume",     "PLAYMENU", "resume"],
+  ["play.new",        "PLAYMENU", "new game"],
+  ["play.back",       "PLAYMENU", "back"],
+  ["confirm.reset",   "CONFIRM",  "reset?"],
+  ["confirm.abandon", "CONFIRM",  "abandon round?"],
+  ["confirm.restart", "CONFIRM",  "restart?"],
+  ["confirm.no",      "CONFIRM",  "no"],
+  ["confirm.yes",     "CONFIRM",  "yes"],
+  ["pause.heading",   "PAUSE",    "pause"],
+  ["pause.resume",    "PAUSE",    "resume"],
+  ["pause.main",      "PAUSE",    "main menu"],
+  ["settings.heading","SETTINGS", "settings heading"],
+  ["settings.reset",  "SETTINGS", "reset high score"],
+  ["settings.speaker","SETTINGS", "speaker"],
+  ["settings.sounds", "SETTINGS", "sound toggle"],
+  ["settings.edges",  "SETTINGS", "edges toggle"],
+  ["settings.back",   "SETTINGS", "back"],
+  ["hiscore.heading", "HISCORE",  "high score heading"],
+  ["hiscore.back",    "HISCORE",  "back"],
+  ["over.heading",    "OVER",     "game over"],
+  ["over.replay",     "OVER",     "replay"],
+  ["over.menu",       "OVER",     "menu"],
+  ["about.menu",      "ABOUT",    "menu"],
+  ["tut.menu",        "TUT",      "menu"]
+];
+/* The same circle drawn as a label rather than a button. */
+function slotLabel(id, k, text, fs, rot, lh){
+  drawButton(slot(k, { id:id, fs:fs, rot:rot, lh:lh, label:text, solid:true }));
+}
+
+/* The wordmark, bottom right, the side the original used. It is the same block
+   in the same place on every screen that carries it, so it has to be settled
+   here, before the menus that line themselves up with it. */
+const TITLE_R = 294, TITLE_Y = 612, TITLE_PX = 54;
+const SUBTITLE = "forever";
+const SUB_GAP = 6;               // between the mark's ink and the subtitle's
+/* Both lines are set on their middles, so the ink of a line runs from about a
+   third of its size above its middle to the same fraction below. */
+const TITLE_CAP = 0.35;
+
+MENUS[SC.MENU] = [
+  /* Nothing to resume means the play menu has one live button on it, so skip
+     it and start the round. */
+  slot("B", { id:"menu.play", fs:57, label:"play!", rot:3.3, solid:true,
+              act:function(){ if (resumable()) scene = SC.PLAYMENU; else newGame(); } }),
+  slot("A", { id:"menu.high", fs:32, label:"high\nscore", rot:-6.5, lh:0.80, solid:true,
+              act:function(){ scene = SC.HISCORE; } }),
+  slot("C", { id:"menu.settings", fs:27, label:"settings", rot:-6.1, solid:true, act:function(){ scene = SC.SETTINGS; } }),
+  slot("E", { id:"menu.info", fs:26, label:"i", rot:-10.3, act:function(){ scene = SC.ABOUT; } }),
+  slot("D", { id:"menu.help", fs:43, label:"?", rot:5.5, act:function(){ tutStep=0; scene = SC.TUT; } })
+];
+/* Resume sits where play! was, so a second tap in the same place picks the
+   saved round back up rather than throwing it away. New game moves down to the
+   circle a thumb has to travel to. */
+MENUS[SC.PLAYMENU] = [
+  slot("B", { id:"play.resume", fs:38, rot:8.9, label:"resume", solid:true,
+              act:function(){ if (resumable()) { auditSize(); scene = SC.GAME; } } }),
+  /* Starting over throws away a round that is still going, so it asks first. */
+  slot("C", { id:"play.new", fs:31, lh:0.86, rot:-7.1, label:"new\ngame", solid:true,
+              act:function(){ ask("confirm.abandon", "abandon\nround?", 33, -7.6, newGame, SC.PLAYMENU, false); } }),
+  slot("D", { id:"play.back", fs:21, rot:3.4, label:"back", act:function(){ scene = SC.MENU; } })
+];
+/* One screen for every question the game has to ask, the way the original asked
+   before a reset. The prompt goes in the big circle and the answer comes back
+   through a stored action, so reset, abandon and restart all look the same and
+   all cancel back to wherever they were asked from. */
+/* Each question carries its own id, because they are different lengths on
+   different numbers of lines and one position does not suit all three. */
+let askId = "confirm.reset", askText = "reset?", askFs = 46, askRot = 2.7;
+let askYes = null, askBack = SC.MENU, askOverField = false;
+function ask(id, text, fs, rot, yes, back, overField){
+  askId = id; askText = text; askFs = fs; askRot = rot; askYes = yes;
+  askBack = back; askOverField = !!overField;
+  scene = SC.CONFIRM;
+}
+MENUS[SC.CONFIRM] = [
+  slot("A", { id:"confirm.no",  fs:53, rot:-3.6, label:"no",  act:function(){ scene = askBack; } }),
+  slot("C", { id:"confirm.yes", fs:51, rot:4.5, label:"yes", act:function(){ if (askYes) askYes(); } })
+];
+/* The same three circles as the reset screen, with the heading in the top one.
+   Nothing happens when you press the heading; it is a label that happens to be
+   round. */
+MENUS[SC.PAUSE] = [
+  slot("B", { id:"pause.resume", fs:38, rot:8.9, label:"resume", solid:true,
+              act:function(){ scene = SC.GAME; } }),
+  slot("C", { id:"pause.main", fs:32, lh:0.86, rot:-7.1, label:"main\nmenu", solid:true,
+              act:function(){ scene = SC.MENU; } }),
+  slot("D", { restart:true,
+              act:function(){ ask("confirm.restart", "restart?", 37, 2.7, newGame, SC.PAUSE, true); } })
+];
+/* Sits on the far side of the screen from the wordmark, on its centre line, so
+   the bottom of the page reads as one row. */
+MENUS[SC.ABOUT]   = [ { id:"about.menu", x: 40, fy: function(){ return titleM().mid; }, r:26, fs:12,
+                        label:"menu", act:function(){ scene = SC.MENU; } } ];
+/* Reset moved to Settings, which is where the original kept it. */
+MENUS[SC.HISCORE] = [
+  slot("D", { id:"hiscore.back", fs:21, label:"back", rot:3.4, act:function(){ scene = SC.MENU; } })
+];
+MENUS[SC.SETTINGS] = [
+  slot("A", { id:"settings.reset", fs:27, lh:0.96, rot:-4.9, label:"reset\nhigh\nscore",
+              act:function(){ ask("confirm.reset", "reset?", 46, 2.7, function(){
+                       high = 0; highDue = true; scene = SC.SETTINGS;
+                     }, SC.SETTINGS, false); } }),
+  slot("B", { id:"settings.speaker", sound:true, label:"",
+              act:function(){ soundOn = !soundOn; store.set("sound", soundOn); if (soundOn) play("tap", 0.5); } }),
+  slot("F", { id:"settings.sounds", fs:13, lh:1.10, rot:3.2, toggle:true, quiet:true,
+              on:   function(){ return scheme === 1; },
+              text: function(){ return (scheme === 1 ? "bubble" : "original") + "\nsounds"; },
+              act:  function(){ setScheme(); } }),
+  slot("E", { id:"settings.edges", fs:11, lh:1.16, rot:-2, toggle:true,
+              on:   function(){ return wallsOn; },
+              text: function(){ return wallsOn ? "edges\non" : "edges\noff"; },
+              act:  function(){ wallsOn = !wallsOn; wallsSet = wallsOn; store.set("walls", wallsOn); } }),
+  slot("D", { id:"settings.back", fs:21, label:"back", rot:3.4, act:function(){ scene = SC.MENU; } })
+];
+MENUS[SC.TUT] = [
+  { x: 40, y:440, r:26, chev:-1, act:function(){ tutStep = Math.max(0, tutStep-1); } },
+  { x:280, y:440, r:26, chev: 1, act:function(){ if (tutStep>=4) scene = SC.MENU; else tutStep++; } },
+  { id:"tut.menu", x:280, y: 45, r:23, fs:11, label:"menu", act:function(){ scene = SC.MENU; } }
+];
+MENUS[SC.OVER] = [
+  slot("C", { id:"over.replay", fs:32, label:"replay", rot:5.1, act:function(){ newGame(); } }),
+  slot("D", { id:"over.menu", fs:21, label:"menu", rot:-5.1, act:function(){ scene = SC.MENU; } })
+];
+
+const TUT_TEXT = [
+  ["FRICT",       ["Your goal is to shoot balls into the playfield and score points by removing them again."]],
+  ["SHOOT",       ["Touch and hold anywhere on the screen, then release to shoot in the direction of the arrow. If your ball hits the dashed line on its way down, the game is over."]],
+  ["SIZE",        ["When the ball stops moving, its size will increase until the ball touches an edge or another ball."]],
+  ["SCORE",       ["To score points, remove balls from the playfield by hitting them twice."]],
+  ["BONUS BALLS", ["Double ball: every ball removed by this ball adds 2 to your score.",
+                   "Triple ball: every ball removed by this ball adds 3 to your score.",
+                   "Razor: this ball removes everything in its path."]]
+];
+
+/* ---------------------------------------------------------------- state */
+let statics = [];
+let ball = null;
+let score = 0;
+let high = store.get("high", 0);
+let nextType = "normal";
+let aiming = false, aimAngle = 0, aimDir = 1, armed = false;
+let pts = [];
+let prevAim = 0, alphaT = 0;
+let aimDelay = 0;          // dead time after a press, before the arrow moves
+let dying = 0;             // seconds of play left to watch before the game over screen
+function lerp(a, b, t){ return a + (b - a) * t; }
+let inPlay = false;
+let overFlash = 0;
+
+const ARROW_DY  = ARROW_BASE - (SHOT_R + ARROW_GAP);
+const ARROW_LEN = 64.3 - ARROW_DY;   // tip height above the ball's centre
+function drawArrow(){
+  ctx.save();
+  ctx.translate(0, ARROW_DY);
+  ctx.fillStyle = "#00ff00";
+  ctx.fill(ARROW_PATH);
+  ctx.restore();
+}
+function launchY(){ return Math.min(H - SHOT_R - 8, P.launch); }
+/* Resume is only offered for a game that is genuinely mid-play with a ball
+   waiting. A finished round leaves its statics behind but clears inPlay. */
+function resumable(){ return inPlay && ball !== null; }
+
+/* The first ball of a game is always plain. From then on the razor is drawn
+   first, on a pity counter: 2.5% plus half a point for every ball since the
+   last razor, so turn 1 is 3%, turn 10 is 7.5%, turn 20 is 12.5%. A razor
+   resets the counter. If the razor misses, the striped balls are drawn flat. */
+let turn = 0, pity = 0;
+function razorChance(){ return Math.min(1, (2.5 + pity / 2) / 100); }
+function dealType(){
+  if (turn === 0) { nextType = "normal"; turn++; pity++; return; }
+  turn++;
+  if (Math.random() < razorChance()) {
+    nextType = "razor"; pity = 0;
+  } else {
+    const r = Math.random();
+    nextType = r < 0.07 ? "triple" : r < 0.18 ? "double" : "normal";
+  }
+  pity++;
+}
+function makeBall(type){
+  const rr = type === "razor" ? SHOT_R * RAZOR_SCALE : SHOT_R;
+  const ly = launchY();
+  ball = { x: W/2, y: ly, px: W/2, py: ly, vx:0, vy:0, r: rr, pr: rr,
+           type: type, state:"aim", spin:0, pspin:0, spinVel:0 };
+  armed = false;
+}
+function readyBall(){ endReplay(); dealType(); makeBall(nextType); }
+/* GameDirector in the original had saveGame and isCurrentGameResumable, so a
+   round survived leaving the app. This does the same through localStorage. */
+/* localStorage is synchronous and can block for tens of milliseconds. These
+   used to fire inside the step that landed a ball or took a point, putting a
+   stall exactly where the next shot begins. Queued out of the frame instead. */
+let saveDue = false, highDue = false;
+function saveGame(){ saveDue = true; }
+/* Marking the save due and letting the timer catch it is good enough for a
+   landing, which cannot be taken back anyway. A ball in the air is different:
+   that is the moment somebody would kill the app from the switcher, and iOS
+   runs no handler at all when they do, so the file on disk would still be the
+   field as it stood before the shot. The launch is therefore written the
+   instant the ball leaves, synchronously, and it carries the ball's position
+   and velocity. Nothing random happens while a ball is in the air, so that
+   record runs forward to exactly the outcome the shot was going to have. */
+function saveLaunch(){
+  if (!ball) return;
+  saveDue = false;
+  try {
+    store.set("game", { s: statics, sc: score, t: turn, p: pity, ty: ball.type,
+                        fl: { x: ball.x, y: ball.y, vx: ball.vx, vy: ball.vy } });
+  } catch(e){}
+}
+function flushSave(){
+  if (highDue) { highDue = false; try { store.set("high", high); } catch(e){} }
+  if (!saveDue) return;
+  saveDue = false;
+  try {
+    if (!inPlay || !ball) store.set("game", null);
+    else store.set("game", { s: statics, sc: score, t: turn, p: pity, ty: ball.type });
+  } catch(e){}
+}
+setInterval(flushSave, 1500);
+window.addEventListener("pagehide", flushSave);
+document.addEventListener("visibilitychange", function(){
+  if (document.hidden) { flushSave(); return; }
+  /* Coming back from the background with a suspended context makes the first
+     sound of the next round arrive late. */
+  if (actx && actx.state === "suspended") { try { actx.resume(); } catch(e){} }
+  auditSize();
+});
+/* The saved shot is not resolved on load; it is played. The ball goes back on
+   the launch point with the arrow at the angle it was fired at, holds there long
+   enough to be read, and then fires itself and runs at normal speed with its own
+   sound. You watch the shot you took rather than arriving at its outcome. Input
+   is ignored until the turn is over, because the shot is already decided and
+   there is nothing left to do about it. */
+const REPLAY_HOLD = 0.5;     // seconds the arrow is held before it fires
+let locked = false;          // the saved shot is playing; the field is not yours
+let replayHold = 0;
+let pendingLaunch = null;
+function fireSaved(){
+  ball.vx = pendingLaunch.vx; ball.vy = pendingLaunch.vy;
+  ball.state = "fly"; armed = false;
+  pendingLaunch = null;
+}
+/* Whatever the shot came to is the position of record, so it cannot be replayed
+   a second time. */
+function endReplay(){
+  if (!locked) return;
+  locked = false; replayHold = 0; pendingLaunch = null;
+  saveDue = true; flushSave();
+}
+function loadGame(){
+  const g = store.get("game", null);
+  if (!g || !g.s || !Array.isArray(g.s)) return false;
+  const k = (typeof g.h === "number" && g.h > 0) ? H / g.h : 1;   // older saves
+  statics = g.s.map(function(o){ return { x:o.x, y:o.y*k, r:o.r, hits:o.hits, cool:0, type:"normal" }; });
+  score = g.sc || 0; turn = g.t || 1; pity = g.p || 0;
+  makeBall(g.ty || "normal");
+  pts = []; inPlay = true;
+  if (g.fl && isFinite(g.fl.x) && isFinite(g.fl.y) &&
+      isFinite(g.fl.vx) && isFinite(g.fl.vy)) {
+    ball.x = ball.px = g.fl.x;
+    ball.y = ball.py = g.fl.y;
+    aimAngle = prevAim = Math.atan2(g.fl.vx, -g.fl.vy);
+    ball.state = "aim"; armed = false;
+    pendingLaunch = { vx: g.fl.vx, vy: g.fl.vy };
+    replayHold = REPLAY_HOLD;
+    locked = true;
+  }
+  return inPlay;
+}
+function newGame(){
+  auditSize();
+  locked = false; replayHold = 0; pendingLaunch = null;
+  statics = []; pts = []; score = 0; overFlash = 0; dying = 0;
+  aimAngle = 0; aimDir = 1; aimDelay = 0;
+  turn = 0; pity = 0;
+  const n = Math.round(P.startBalls);
+  let guard = 0;
+  while (statics.length < n && guard++ < 600) {
+    const r = 22 + Math.random()*16;
+    const x = FIELD_L + r + 6 + Math.random()*(FIELD_R - FIELD_L - 2*r - 12);
+    const y = FIELD_TOP + 24 + Math.random()*(P.baseline - FIELD_TOP - 130);
+    let ok = true;
+    for (const s of statics) if (Math.hypot(x-s.x, y-s.y) < s.r + r + 6) { ok = false; break; }
+    if (ok) statics.push({ x:x, y:y, r:r, hits:2, cool:0, type:"normal" });
+  }
+  readyBall();
+  inPlay = true;
+  saveGame();
+  scene = SC.GAME;
+}
+
+
+/* ---------------------------------------------------------------- input */
+function canvasPoint(ev){
+  /* offsetX and offsetY are already in the element's own coordinates, before any
+     transform on an ancestor, so they need no unwinding and cannot go stale
+     while a rotation settles. The arithmetic below is the fallback, and it was
+     the whole story until presses started going missing after a turn: it reads
+     the rotated bounding box and undoes the rotation by hand, using a media
+     query and an attribute that can disagree with each other for a frame or
+     two. A small button is the first thing to suffer when they do. */
+  const cw = cvs.clientWidth, ch = cvs.clientHeight;
+  if (cw > 0 && ch > 0 && typeof ev.offsetX === "number" && typeof ev.offsetY === "number") {
+    return { x: ev.offsetX / cw * W, y: ev.offsetY / ch * H };
+  }
+  const r = cvs.getBoundingClientRect();
+  const cx = r.left + r.width/2, cy = r.top + r.height/2;
+  let dx = ev.clientX - cx, dy = ev.clientY - cy;
+  let wpx = r.width, hpx = r.height;
+  const rd = rotDir();
+  if (rd) {
+    /* Under rotate(t), a local vector (lx, ly) lands at screen
+       (lx cos t - ly sin t, lx sin t + ly cos t). At +90 that is (-ly, lx), so
+       back is lx = dy, ly = -dx; at -90 it is (ly, -lx), so back is lx = -dy,
+       ly = dx. */
+    const t = dx;
+    if (rd < 0) { dx = -dy; dy = t; }
+    else        { dx =  dy; dy = -t; }
+    wpx = r.height; hpx = r.width;
+  }
+  return { x: (dx + wpx/2) / wpx * W, y: (dy + hpx/2) / hpx * H };
+}
+/* Most buttons still carry the original 320x480 design's y and get scaled; the
+   main menu carries its own, because its arrangement is measured off the
+   bundle's artwork and has to sit in the taller field on its own terms. */
+function btnY(b){
+  if (typeof b.fy === "function") return b.fy();
+  return b.fy === undefined ? V(b.y) : b.fy;
+}
+function menuHit(p){
+  const list = MENUS[scene]; if (!list) return null;
+  for (const b of list) if (Math.hypot(p.x-b.x, p.y-btnY(b)) <= b.r) return b;
+  return null;
+}
+function press(p){
+  audioInit(); if (actx && actx.state === "suspended") actx.resume();
+  if (scene === SC.GAME) {
+    /* The one thing on the field that is a button rather than somewhere to aim
+       from, so it has to be checked before the press becomes an aim. */
+    if (p && inMenuHit(p)) { play("tap", 0.5); scene = SC.PAUSE; return; }
+    /* Pausing is allowed while a saved shot plays; aiming over the top of it is
+       not. */
+    if (locked) return;
+    // resumes from the angle it stopped at, but always sweeping rightward first
+    if (ball && ball.state === "aim") { aiming = true; aimDir = 1; aimDelay = P.aimDelay; }
+    return;
+  }
+  /* A row takes the press before the round buttons get a look, and takes it
+     silently, because a drag is not a button press. */
+  /* the sound button makes its own noise, or none, so it is skipped here */
+  if (p) { const b = menuHit(p); if (b) { if (!b.sound && !b.quiet) play("tap", 0.5); b.act(); } }
+}
+function release(){
+  if (scene === SC.GAME && aiming && ball && ball.state === "aim") {
+    aiming = false;
+    const a = aimAngle;
+    ball.vx =  Math.sin(a) * P.speed;
+    ball.vy = -Math.cos(a) * P.speed;
+    ball.state = "fly";
+    armed = false;
+    saveLaunch();
+  }
+  aiming = false;
+}
+cvs.addEventListener("pointerdown", function(e){ e.preventDefault(); cvs.focus(); press(canvasPoint(e)); });
+window.addEventListener("pointerup", function(){ release(); });
+window.addEventListener("pointercancel", function(){ aiming = false; });
+cvs.addEventListener("keydown", function(e){
+  if (e.key === " " || e.key === "Enter") { e.preventDefault(); if (!aiming) press(null); }
+  else if (e.key === "Escape") { if (scene === SC.GAME) scene = SC.MENU; }
+});
+cvs.addEventListener("keyup", function(e){ if (e.key === " " || e.key === "Enter") { e.preventDefault(); release(); } });
+
+/* ---------------------------------------------------------------- rules */
+function mult(type){ return type === "double" ? 2 : type === "triple" ? 3 : 1; }
+/* Striped balls appear to roll off whatever they touch. Cosmetic only: the kick
+   comes from the tangential part of the velocity at the contact and never feeds
+   back into vx or vy. */
+function spinKick(nx, ny){
+  if (ball.type !== "double" && ball.type !== "triple") return;
+  const vt = ball.vx * (-ny) + ball.vy * nx;
+  ball.spinVel += vt / Math.max(8, ball.r) * 0.715;   // 0.55 + 30%
+  if (ball.spinVel >  21) ball.spinVel =  21;
+  if (ball.spinVel < -21) ball.spinVel = -21;
+}
+
+/* hx,hy is a point along the impact normal, POP_PULL of the way out from the
+   removed ball's centre toward where the shot touched it. */
+function removeStatic(s, gain, hx, hy){
+  const i = statics.indexOf(s); if (i < 0) return;
+  statics.splice(i, 1);
+  score += gain;
+  pts.push({ x: (hx === undefined ? s.x : hx), y: (hy === undefined ? s.y : hy), n:gain, t:0 });
+  play("pop", 0.55);
+  if (score > high) { high = score; highDue = true; }
+}
+function hitStatic(s, type, hx, hy){
+  if (s.cool > 0) return;
+  s.cool = 0.18;
+  if (type === "razor") { removeStatic(s, 1, hx, hy); return; }
+  s.hits -= 1;
+  if (s.hits <= 0) removeStatic(s, mult(type), hx, hy);
+  else play("tap", 0.5);
+}
+/* Death is not instant: the sound lands and the ball is left to travel for a
+   moment so you see what killed you, then the screen comes up. */
+const REST_HOLD = 1/6;       // pause once the ball stops, before grow or vanish
+const DEATH_HOLD = 0.35;
+/* The failure sound lands a beat after the ball is lost rather than on top of
+   it, so the hit and the verdict are two separate events. */
+const OVER_DELAY = 0.15;
+const DEATH_SLOWMO = 0.30;   // the last moment plays slowly enough to read
+function gameOver(){
+  if (dying > 0) return;
+  aiming = false;
+  inPlay = false; saveGame();
+  play("over", 0.7, OVER_DELAY);
+  dying = DEATH_HOLD;
+}
+function endRound(){
+  endReplay();
+  ball = null; overFlash = 1; dying = 0;
+  scene = SC.OVER;
+}
+function land(){
+  if (!armed) { gameOver(); return; }
+  /* Put the ball back inside first: wedged between statics it can finish a
+     substep slightly out of bounds, which made the clearance come out negative
+     and the SHOT_R floor below then grew it straight through the wall. */
+  ball.x = Math.min(FIELD_R - ball.r, Math.max(FIELD_L + ball.r, ball.x));
+  ball.y = Math.max(FIELD_TOP + ball.r, ball.y);
+  ball.px = ball.x; ball.py = ball.y;
+  const wall = Math.min(ball.x - FIELD_L, FIELD_R - ball.x,
+                        ball.y - FIELD_TOP, P.baseline - ball.y);
+  let t = wall;
+  for (const s of statics) t = Math.min(t, Math.hypot(ball.x-s.x, ball.y-s.y) - s.r);
+  t = Math.max(SHOT_R, t);
+  t = Math.max(2, Math.min(t, wall));   // the floor may not breach a boundary
+  ball.type = "normal";
+  ball.r0 = ball.r; ball.target = t; ball.gt = 0;
+  ball.state = "grow";
+}
+
+function stepBall(dt){
+  if (!ball) return;
+  ball.px = ball.x; ball.py = ball.y; ball.pr = ball.r; ball.pspin = ball.spin;
+  prevAim = aimAngle;
+  if (ball.state === "aim") {
+    if (locked) {
+      if (pendingLaunch) { replayHold -= dt; if (replayHold <= 0) fireSaved(); }
+      return;
+    }
+    if (aiming) {
+      /* A short dead time so a quick tap barely moves the arrow at all. */
+      if (aimDelay > 0) { aimDelay -= dt; return; }
+      const lim = 80 * Math.PI / 180;   // 160 degrees of release arc in total
+      aimAngle += aimDir * P.sweep * Math.PI/180 * dt;
+      if (aimAngle >  lim) { aimAngle =  lim; aimDir = -1; }
+      if (aimAngle < -lim) { aimAngle = -lim; aimDir =  1; }
+    }
+    return;
+  }
+  /* A ball that has come to rest waits a beat before it does anything, so the
+     stop reads as a stop rather than running straight into the next animation. */
+  if (ball.state === "rest") {
+    ball.gt += dt;
+    if (ball.gt >= REST_HOLD) {
+      if (ball.type === "razor") { ball.r0 = ball.r; ball.gt = 0; ball.state = "spend"; }
+      else land();
+    }
+    return;
+  }
+  if (ball.state === "spend") {
+    ball.gt += dt;
+    const k = Math.min(1, ball.gt / 0.32);
+    ball.r = ball.r0 * (1 - k*k);
+    ball.spin += (1 - k) * 9 * dt;
+    if (k >= 1) readyBall();
+    return;
+  }
+  if (ball.state === "grow") {
+    ball.gt += dt;
+    const k = P.growTime > 0 ? Math.min(1, ball.gt / P.growTime) : 1;
+    ball.r = ball.r0 + (ball.target - ball.r0) * k;
+    if (k >= 1) {
+      ball.r = ball.target;
+      statics.push({ x:ball.x, y:ball.y, r:ball.r, hits:2, cool:0, type:"normal" });
+      readyBall();
+      saveGame();
+    }
+    return;
+  }
+
+  const sp = Math.hypot(ball.vx, ball.vy);
+  if (ball.type === "razor") ball.spin += sp * 0.030 * dt;
+  else if (ball.type === "double" || ball.type === "triple") {
+    ball.spin += ball.spinVel * dt;
+    ball.spinVel *= Math.pow(0.22, dt);
+  }
+  const sub = Math.max(1, Math.min(8, Math.ceil(sp * dt / 3)));
+  const h = dt / sub;
+  for (let k = 0; k < sub; k++) {
+    /* Plain exponential decay takes the same fraction per second whatever the
+       speed, which is why the tail of the roll feels slippery. Below gripAt the
+       retained fraction is scaled down on a ramp that is 0 at the threshold and
+       1 at a standstill, so the bite arrives gradually and there is no step at
+       the crossing point. grip = 1 leaves the old behaviour untouched. */
+    const v = Math.hypot(ball.vx, ball.vy);
+    let keep = P.friction;
+    if (P.gripAt > 0 && v < P.gripAt) {
+      keep = P.friction * Math.pow(P.grip, 1 - v / P.gripAt);
+    }
+    const f = Math.pow(keep, h);
+    ball.vx *= f; ball.vy *= f;
+    ball.x += ball.vx * h;
+    ball.y += ball.vy * h;
+
+    for (let i = statics.length - 1; i >= 0; i--) {
+      const s = statics[i];
+      const dx = ball.x - s.x, dy = ball.y - s.y;
+      const d = Math.hypot(dx, dy);
+      if (d >= s.r + ball.r) continue;
+      const nx = dx/(d||1), ny = dy/(d||1);
+      if (ball.type === "razor") { hitStatic(s, "razor", s.x + nx*s.r*POP_PULL, s.y + ny*s.r*POP_PULL); continue; }
+      ball.x = s.x + nx*(s.r + ball.r);
+      ball.y = s.y + ny*(s.r + ball.r);
+      spinKick(nx, ny);
+      const scoring = dying <= 0;
+      const dot = ball.vx*nx + ball.vy*ny;
+      ball.vx = (ball.vx - 2*dot*nx) * P.bounce;
+      ball.vy = (ball.vy - 2*dot*ny) * P.bounce;
+      if (scoring) hitStatic(s, ball.type, s.x + nx*s.r*POP_PULL, s.y + ny*s.r*POP_PULL);
+    }
+
+    /* Walls last. Pushing clear of a static can eject the ball past a wall, and
+       running this first left it outside until the following substep. */
+    if (ball.x - ball.r < FIELD_L) { ball.x = FIELD_L + ball.r; spinKick(1, 0); ball.vx = -ball.vx * P.bounce; }
+    if (ball.x + ball.r > FIELD_R) { ball.x = FIELD_R - ball.r; spinKick(-1, 0); ball.vx = -ball.vx * P.bounce; }
+    if (ball.y - ball.r < FIELD_TOP) { ball.y = FIELD_TOP + ball.r; spinKick(0, 1); ball.vy = -ball.vy * P.bounce; }
+
+    if (!armed && ball.y + ball.r < P.baseline) armed = true;
+    if (dying <= 0 && ball.type !== "razor") {
+      /* Turning back downward without ever having cleared the line ends it on
+         the spot, rather than letting the ball wander below and off screen. */
+      if (!armed && ball.vy > 0) { gameOver(); break; }
+      if (armed && ball.vy > 0 && ball.y + ball.r >= P.baseline) { gameOver(); break; }
+    }
+    if (ball.y - ball.r > H + 40) {
+      if (ball.type === "razor") { readyBall(); return; }
+      if (dying > 0) { endRound(); return; }
+      gameOver(); return;
+    }
+  }
+
+  if (dying <= 0 && Math.hypot(ball.vx, ball.vy) < P.stopAt) {
+    ball.vx = 0; ball.vy = 0;
+    ball.gt = 0; ball.state = "rest";
+  }
+}
+
+function stepWorld(dt){
+  if (dying > 0) { dying -= dt; if (dying <= 0) { endRound(); return; } }
+  for (const s of statics) if (s.cool > 0) s.cool -= dt;
+  for (let i = pts.length - 1; i >= 0; i--) {
+    pts[i].t += dt; pts[i].y -= 26*dt;
+    if (pts[i].t > 0.9) pts.splice(i, 1);
+  }
+  if (overFlash > 0) overFlash = Math.max(0, overFlash - dt*1.4);
+  if (scene === SC.GAME) stepBall(dying > 0 ? dt * DEATH_SLOWMO : dt);
+}
+
+/* ---------------------------------------------------------------- draw */
+/* Vector balls. Proportions measured off the decoded PVRTC textures:
+   ring outer 1.00R, ring inner 0.875R, inner disc 0.75R, stripe width 0.17R;
+   razor hole 0.55R, spike valley 0.72R, 12 points. */
+function stripeBars(x, y, r, n, clipR, color, spin){
+  ctx.save();
+  ctx.beginPath(); ctx.arc(x, y, clipR, 0, Math.PI*2); ctx.clip();
+  ctx.translate(x, y); ctx.rotate(-Math.PI/4 + (spin || 0));
+  ctx.fillStyle = color;
+  const wd = Math.max(1, r*0.17), span = r*1.6, gap = n === 2 ? r*0.80 : r*0.52;
+  for (let i = 0; i < n; i++) ctx.fillRect(-span, (i - (n-1)/2)*gap - wd/2, span*2, wd);
+  ctx.restore();
+}
+function drawBall(x, y, r, type, hits, spin){
+  const G = "#00ff00";
+  if (r <= 0.6) return;
+  if (type === "razor") {
+    const pts = 12, off = spin || 0;
+    ctx.beginPath();
+    for (let i = 0; i < pts*2; i++) {
+      const a = i/(pts*2)*Math.PI*2 - Math.PI/2 + off;
+      const rr = (i % 2 === 0) ? r : r*0.72;
+      const px = x + Math.cos(a)*rr, py = y + Math.sin(a)*rr;
+      if (i) ctx.lineTo(px, py); else ctx.moveTo(px, py);
+    }
+    ctx.closePath();
+    ctx.moveTo(x + r*0.55, y);
+    ctx.arc(x, y, r*0.55, 0, Math.PI*2, true);
+    ctx.closePath();
+    ctx.fillStyle = G; ctx.fill("evenodd");
+    return;
+  }
+  ctx.beginPath();
+  ctx.arc(x, y, r*0.9375, 0, Math.PI*2);
+  ctx.lineWidth = Math.max(1, r*0.125);
+  ctx.strokeStyle = G;
+  ctx.stroke();
+  const n = type === "double" ? 2 : type === "triple" ? 3 : 0;
+  if (hits >= 2) {
+    ctx.beginPath(); ctx.arc(x, y, r*0.75, 0, Math.PI*2);
+    ctx.fillStyle = G; ctx.fill();
+    if (n) stripeBars(x, y, r, n, r*0.75, "#000000", spin);
+  } else if (n) {
+    stripeBars(x, y, r, n, r*0.80, G, spin);
+  }
+}
+/* x,y is the baseline. drawNumberMid centres the digits on y instead. */
+function drawNumber(n, x, y, px, align, color){
+  ctx.font = "700 " + px + "px " + BARLOW;
+  ctx.textAlign = align || "left";
+  ctx.textBaseline = "alphabetic";
+  ctx.fillStyle = color || "#00ff00";
+  ctx.fillText(String(n), x, y);
+}
+function drawNumberMid(n, x, cy, px, align){
+  drawNumber(n, x, cy + px * NUMCAP / 2, px, align);
+}
+/* Every ring is as thick, relative to its own radius, as the play circle's:
+   12 on 91. The artwork was not consistent about this and the difference shows
+   most at the small sizes, where a fixed weight reads as a heavy blob. */
+const RING_K = 12 / 91;
+/* The three big buttons sit at dr/r of .773, .791 and .775; the toggles have no
+   measured disc of their own, so they take the average. */
+const TOGGLE_DR = 0.78;
+function ringW(b){ return b.rw === undefined ? b.r * RING_K : b.rw; }
+function ring(x, y, r, lw){
+  ctx.beginPath(); ctx.arc(x, y, r - lw/2, 0, Math.PI*2);
+  ctx.fillStyle = "#000"; ctx.fill();
+  ctx.lineWidth = lw; ctx.strokeStyle = "#00ff00"; ctx.stroke();
+}
+function label(text, x, y, size, color, align, weight, face, lhm){
+  ctx.font = (weight||500) + " " + size + "px " + (face || FREDOKA);
+  ctx.textAlign = align || "center";
+  ctx.textBaseline = "middle";
+  ctx.fillStyle = color || "#00ff00";
+  const lines = String(text).split("\n");
+  const lh = size * (lhm || 1.02);
+  for (let i=0;i<lines.length;i++) ctx.fillText(lines[i], x, y + (i - (lines.length-1)/2) * lh);
+}
+/* Body copy is Barlow at 400, its regular. */
+const BODYWT = 400;
+function body(text, x, y, size, maxw, color){
+  ctx.font = BODYWT + " " + size + "px " + BARLOW;
+  ctx.textAlign = "left"; ctx.textBaseline = "top";
+  ctx.fillStyle = color || "#d8f5d8";
+  const words = String(text).split(" ");
+  let line = "", yy = y;
+  for (let i=0;i<words.length;i++){
+    const test = line ? line + " " + words[i] : words[i];
+    if (ctx.measureText(test).width > maxw && line) { ctx.fillText(line, x, yy); yy += size*1.42; line = words[i]; }
+    else line = test;
+  }
+  if (line) { ctx.fillText(line, x, yy); yy += size*1.42; }
+  return yy;
+}
+/* The speaker icon, from a 24 by 24 drawing. The speaker itself is its own path
+   and is drawn in both states, so turning sound on and off changes only what
+   sits to its right: nothing about the speaker can shift between the two. */
+const ICON_SPEAKER = new Path2D("M11.38,4.08a1,1,0,0,0-1.09.21L6.59,8H4a2,2,0,0,0-2,2v4a2,2,0,0,0,2,2H6.59l3.7,3.71A1,1,0,0,0,11,20a.84.84,0,0,0,.38-.08A1,1,0,0,0,12,19V5A1,1,0,0,0,11.38,4.08Z");
+const ICON_WAVES = new Path2D("M18.36,19.36a1,1,0,0,1-.7-.29,1,1,0,0,1,0-1.41,8,8,0,0,0,0-11.32,1,1,0,0,1,1.41-1.41,10,10,0,0,1,0,14.14A1,1,0,0,1,18.36,19.36Z M15.54,16.54a1,1,0,0,1-.71-.3,1,1,0,0,1,0-1.41,4,4,0,0,0,0-5.66,1,1,0,0,1,1.41-1.41,6,6,0,0,1,0,8.48A1,1,0,0,1,15.54,16.54Z");
+const ICON_MUTE = new Path2D("M16,15.5a1,1,0,0,1-.71-.29,1,1,0,0,1,0-1.42l5-5a1,1,0,0,1,1.42,1.42l-5,5A1,1,0,0,1,16,15.5Z M21,15.5a1,1,0,0,1-.71-.29l-5-5a1,1,0,0,1,1.42-1.42l5,5a1,1,0,0,1,0,1.42A1,1,0,0,1,21,15.5Z");
+/* A circle broken at the top left with an arrowhead turning into the gap. Two
+   stroked paths in a 24 by 24 box, drawn rather than filled, so the weight
+   scales with the button the way a ring's does. */
+const ICON_RESTART = new Path2D("M12 2.99982C16.9706 2.99982 21 7.02925 21 11.9998C21 16.9704 16.9706 20.9998 12 20.9998C7.02944 20.9998 3 16.9704 3 11.9998C3 9.17255 4.30367 6.64977 6.34267 4.99982");
+const ICON_RESTART_TIP = new Path2D("M3 4.49982H7V8.49982");
+const ICON_SCALE = 0.045;    // of the button's radius, so it travels with it
+const ICON_TILT  = -7;       // degrees, counter-clockwise
+
+/* Drawn rather than set in type. A guillemet sits on the text baseline and its
+   ink is nowhere near the middle of the em, so setting one never lands in the
+   centre of a circle however it is aligned. */
+/* A chevron has one stroke at its point and two at its open end, so its ink
+   gathers toward the open end and a geometrically centred one reads as having
+   drifted inward. Nudged toward its point, which on these buttons is the near
+   edge of the screen. */
+const CHEV_BIAS = 0.09;
+function chevron(x, y, s, dir){
+  ctx.save();
+  ctx.translate(x + dir * s * CHEV_BIAS, y);
+  ctx.strokeStyle = "#00ff00"; ctx.lineWidth = s * 0.30;
+  ctx.lineCap = "round"; ctx.lineJoin = "round";
+  ctx.beginPath();
+  ctx.moveTo(-dir * s * 0.34, -s * 0.52);
+  ctx.lineTo( dir * s * 0.34, 0);
+  ctx.lineTo(-dir * s * 0.34, s * 0.52);
+  ctx.stroke();
+  ctx.restore();
+}
+/* Text set on its middle sits on the em box, which carries descender space
+   whether the word uses it or not. A word with a tail rides low in its circle
+   and a word without one rides high. This places the block's ink on the centre
+   instead, which is what the eye is judging. */
+/* Two reference measurements per face and size: where an x-height letter tops
+   out, where the baseline sits, and how far a cap reaches. Cached, because this
+   runs for every label on every frame. */
+const FACE = {};
+function faceM(size, weight){
+  const k = weight + "|" + size;
+  if (FACE[k]) return FACE[k];
+  ctx.font = weight + " " + size + "px " + FREDOKA;
+  ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  const n = ctx.measureText("n"), h = ctx.measureText("H");
+  const m = { xTop: n.actualBoundingBoxAscent, base: n.actualBoundingBoxDescent,
+              capTop: h.actualBoundingBoxAscent };
+  if (isFinite(m.xTop) && isFinite(m.base)) FACE[k] = m;
+  return m;
+}
+function inkLabel(text, x, y, size, color, weight, lhm){
+  const wt = weight || 500;
+  const fm = faceM(size, wt);
+  ctx.font = wt + " " + size + "px " + FREDOKA;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillStyle = color;
+  const lines = String(text).split("\n");
+  const lh = size * (lhm || 1.02);
+  const a = ctx.measureText(lines[0]).actualBoundingBoxAscent;
+  let   d = ctx.measureText(lines[lines.length-1]).actualBoundingBoxDescent;
+  /* A word that reaches above the x-height reads as a tall shape and the eye
+     centres all of it, tail included. A word that is all x-height with one tail
+     hanging off it does not: the eye centres the body and lets the tail hang,
+     the way "yes" wants to sit and "play!" does not. */
+  if (isFinite(fm.xTop) && isFinite(fm.capTop) && isFinite(fm.base)) {
+    const tall = a > fm.xTop + (fm.capTop - fm.xTop) * 0.35;
+    if (!tall) d = Math.min(d, fm.base);
+  }
+  const off = (isFinite(a) && isFinite(d)) ? (a - d) / 2 : 0;
+  for (let i = 0; i < lines.length; i++)
+    ctx.fillText(lines[i], x, y + off + (i - (lines.length-1)/2) * lh);
+}
+/* One place where a nudge from the table is folded into a button's own numbers,
+   so every branch below sees the settled values and nothing else has to know
+   the table exists. */
+function laid(b){
+  const o = layOf(b.id);
+  if (!o) return b;
+  const c = Object.assign({}, b);
+  c.ldx = o.dx || 0;
+  c.ldy = o.dy || 0;
+  if (o.fs  !== undefined && o.fs  !== null) c.fs  = o.fs;
+  if (o.rot !== undefined && o.rot !== null) c.rot = o.rot;
+  if (o.lh  !== undefined && o.lh  !== null) c.lh  = o.lh;
+  return c;
+}
+function drawButton(b0){
+  if (b0.id && !LAY_DEF[b0.id]) {
+    LAY_DEF[b0.id] = { fs: b0.fs || 14, rot: b0.rot || 0,
+                       lh: b0.lh === undefined ? 1.02 : b0.lh,
+                       lines: String(b0.label || (b0.text && b0.text()) || "").split("\n").length };
+  }
+  const b = laid(b0);
+  const by = btnY(b);
+  if (b.chev) { ring(b.x, by, b.r, ringW(b)); chevron(b.x, by, b.r * 0.42, b.chev); return; }
+  /* A toggle is the same two-stage circle as the big buttons, with the inner
+     disc standing for the setting: an empty ring is the default, the disc
+     filled in is the other choice. The word does not change with it. */
+  if (b.toggle) {
+    const on = b.on(), rw = ringW(b);
+    ring(b.x, by, b.r, rw);
+    if (on) {
+      ctx.fillStyle = "#00ff00";
+      ctx.beginPath(); ctx.arc(b.x, by, b.dr === undefined ? b.r * TOGGLE_DR : b.dr, 0, Math.PI*2);
+      ctx.fill();
+    }
+    ctx.save();
+    ctx.translate(b.x + (b.ldx || 0), by + (b.ldy || 0));
+    if (b.rot) ctx.rotate(b.rot * Math.PI / 180);
+    inkLabel(b.text(), 0, 0, b.fs || 12, on ? "#000000" : "#00ff00", on ? 600 : 500, b.lh);
+    ctx.restore();
+    return;
+  }
+  /* The main menu's three big buttons: a filled disc with its own ring standing
+     off it, which is how the original drew them. */
+  if (b.solid) {
+    const rw = ringW(b);
+    ctx.fillStyle = "#00ff00";
+    ctx.beginPath(); ctx.arc(b.x, by, b.dr, 0, Math.PI*2); ctx.fill();
+    ctx.lineWidth = rw; ctx.strokeStyle = "#00ff00";
+    ctx.beginPath(); ctx.arc(b.x, by, b.r - rw/2, 0, Math.PI*2); ctx.stroke();
+    /* The original set each of these labels on its own slight angle, measured
+       here off the artwork rather than guessed. */
+    ctx.save();
+    ctx.translate(b.x + (b.ldx || 0), by + (b.ldy || 0));
+    if (b.rot) ctx.rotate(b.rot * Math.PI / 180);
+    inkLabel(b.label, 0, 0, b.fs || 14, "#000000", 600, b.lh);
+    ctx.restore();
+    return;
+  }
+  if (b.restart) {
+    ring(b.x, by, b.r, ringW(b));
+    ctx.save();
+    ctx.translate(b.x + (b.ldx || 0), by + (b.ldy || 0));
+    const s = b.r * ICON_SCALE * 0.944;
+    ctx.scale(s, s);
+    ctx.translate(-12, -12);              // the glyph's own 24x24 centre
+    ctx.strokeStyle = "#00ff00";
+    ctx.lineWidth = 2.7; ctx.lineCap = "round"; ctx.lineJoin = "round";
+    ctx.stroke(ICON_RESTART);
+    ctx.stroke(ICON_RESTART_TIP);
+    ctx.restore();
+    return;
+  }
+  if (b.sound) {
+    ring(b.x, by, b.r, ringW(b));
+    ctx.save();
+    ctx.translate(b.x + (b.ldx || 0), by + (b.ldy || 0));
+    ctx.rotate(ICON_TILT * Math.PI / 180);
+    const s = b.r * ICON_SCALE;
+    ctx.scale(s, s);
+    ctx.translate(-12, -12);                  // the icon's own 24x24 centre
+    ctx.fillStyle = "#00ff00";
+    ctx.fill(ICON_SPEAKER);
+    ctx.fill(soundOn ? ICON_WAVES : ICON_MUTE);
+    ctx.restore();
+    return;
+  }
+  ring(b.x, by, b.r, ringW(b));
+  ctx.save();
+  ctx.translate(b.x + (b.ldx || 0), by + (b.ldy || 0));
+  if (b.rot) ctx.rotate(b.rot * Math.PI / 180);
+  inkLabel(b.label, 0, 0, b.fs || 14, "#00ff00", b.big ? 600 : 500, b.lh);
+  ctx.restore();
+}
+function drawMenu(){
+  const list = MENUS[scene]; if (!list) return;
+  for (const b of list) {
+    if (scene === SC.PLAYMENU && b.label === "resume" && !resumable()) {
+      ctx.save(); ctx.globalAlpha = 0.28; drawButton(b); ctx.restore();
+    } else if (scene === SC.TUT && b.chev === -1 && tutStep === 0) {
+      ctx.save(); ctx.globalAlpha = 0.28; drawButton(b); ctx.restore();
+    } else drawButton(b);
+  }
+}
+/* One field unit, unless the window is small enough that one unit falls under a
+   device pixel, in which case the line would render as a grey smear instead of a
+   green line. Everything is drawn through a uniform scale of q, so a unit is q
+   device pixels and 1/q units is exactly one of them. */
+function hair(){ return Math.max(TOP_LINE, 1/q); }
+function topRule(){
+  ctx.fillStyle = "#007f00";
+  ctx.fillRect(0, TOP, W, hair());
+}
+/* Eleven dashes and ten gaps of equal length span the field exactly, so the line
+   starts and ends on a dash against the walls rather than trailing off in air. */
+function baseline(){
+  const h = hair(), d = W / 21;
+  ctx.fillStyle = "#007f00";
+  for (let i = 0; i < 11; i++) ctx.fillRect(i * 2 * d, P.baseline - h/2, d, h);
+}
+/* Grown inwards, so that clamping to a device pixel can never push a line off
+   the edge of the canvas and lose half of it. The sides start level with the top
+   of the rule rather than at the top of the screen, so the corner is flush and
+   neither line runs past the other, and a fourth line closes the bottom. */
+/* A phone's display has rounded corners and the canvas runs full bleed into
+   them, so a square box loses its bottom corners to the curve and reads as
+   broken. Curving the bottom two lets the line follow the screen instead of
+   being cut by it; 34 units is roughly a recent iPhone's corner radius scaled
+   into this field, and on a square display it simply looks deliberate. The top
+   two get half a ball's radius, which is small enough that no ball can ever
+   reach into the curve, so it costs the playfield nothing. */
+const EDGE_R  = 34;
+const EDGE_RT = SHOT_R / 2;
+/* The bottom line sits one line width up from the very edge rather than on it. */
+/* topY lets the tutorial draw the same box with its rule further down the
+   screen. Everything else about it, both corner radii and the lifted bottom
+   line, is the same drawing the field uses. */
+function edgeBox(topY){
+  const h = hair(), k = h/2, t = (topY === undefined ? TOP : topY) + k,
+        b = H - k - h, R = EDGE_R, r = EDGE_RT;
+  ctx.save();
+  ctx.strokeStyle = "#007f00"; ctx.lineWidth = h;
+  ctx.lineJoin = "round"; ctx.lineCap = "round";
+  ctx.beginPath();
+  ctx.moveTo(k, t + r);
+  ctx.quadraticCurveTo(k, t, k + r, t);
+  ctx.lineTo(W - k - r, t);
+  ctx.quadraticCurveTo(W - k, t, W - k, t + r);
+  ctx.lineTo(W - k, b - R);
+  ctx.quadraticCurveTo(W - k, b, W - k - R, b);
+  ctx.lineTo(k + R, b);
+  ctx.quadraticCurveTo(k, b, k, b - R);
+  ctx.closePath();
+  ctx.stroke();
+  ctx.restore();
+}
+
+const QUIET = "#007f00";
+/* One step down from the quiet green, for the line under the wordmark. At the
+   size that line is set now, the quiet green competes with the mark itself. */
+const HUSH = "#004600";
+/* Number on top, its caption under it: best under the best, and under the score
+   three dots, which is the way back to the menu. No word for it on the field.
+   SCORE_BASE is the bottom of the whole block, measured up from the bottom of
+   the screen, so the two rows are placed from there upward. */
+const LAB_PX = 15, LAB_CAP = 0.70, SCORE_GAP = 13;
+const SCORE_LAB_Y = H - SCORE_BASE - LAB_PX * LAB_CAP / 2;
+const SCORE_NUM_Y = SCORE_LAB_Y - LAB_PX * LAB_CAP / 2 - SCORE_GAP;
+/* Each column hangs off its own edge, so a number grows inward as it gains
+   digits and nothing ever reaches the screen edge. */
+const SCORE_MARGIN = 12;
+/* A rectangle, not a circle, reaching up over the score and down to the very
+   bottom edge of the screen. The dots sit close enough to the bottom that a
+   small target there competes with the system's own gesture area, which is what
+   made presses go missing. Nothing else lives below the dashed line on this
+   side and the arrow never sweeps past x 97, so the extra area costs nothing,
+   and a stray press is cheap now that it opens a screen with resume on it. */
+const MENU_HIT = { r: 54, t: SCORE_NUM_Y - 30 };
+function inMenuHit(p){ return p.x <= MENU_HIT.r && p.y >= MENU_HIT.t; }
+/* textAlign lines up the advance box, which carries the face's side bearings,
+   so a number and the caption under it set to the same edge still do not have
+   their ink flush with each other. Barlow's digits carry about a unit on each
+   side; the dots are drawn ink-first and carry none, which is the gap. These
+   place the ink itself, so every edge of the block lands on the margin. */
+function inkText(text, x, y, px, weight, face, color, base, right){
+  ctx.font = weight + " " + px + "px " + face;
+  ctx.textAlign = right ? "right" : "left";
+  ctx.textBaseline = base;
+  const m = ctx.measureText(text);
+  const b = right ? m.actualBoundingBoxRight : m.actualBoundingBoxLeft;
+  ctx.fillStyle = color;
+  ctx.fillText(text, x + (isFinite(b) ? (right ? -b : b) : 0), y);
+}
+/* x is the left edge of the group, so the dots set flush with the score above
+   them rather than on its centre. */
+function dots(x, y, color){
+  ctx.fillStyle = color;
+  const r = 2.2;
+  for (let i = 0; i < 3; i++) {
+    ctx.beginPath(); ctx.arc(x + r + i * 9, y, r, 0, Math.PI*2); ctx.fill();
+  }
+}
+function drawGame(){
+  /* With the walls on the rule is the top of the box, corners and all; with them
+     off it is a plain line across the screen, square as it always was. */
+  if (wallsOn) edgeBox(); else topRule();
+  baseline();
+
+  /* The score sits under everything that is in play, so a ball that rolls down
+     into the corner passes over its own number rather than behind it. */
+  /* high tracks the score upward as you play, so being level with it is what
+     beating it looks like from inside the round. The best lights up and its
+     caption with it; the running score stays quiet, so the thing that changed is
+     the thing that draws the eye. */
+  const hot = score > 0 && score >= high;
+  const bc  = hot ? "#00ff00" : QUIET;
+  inkText(String(score), SCORE_MARGIN, SCORE_NUM_Y, SCORE_PX, 700, BARLOW, QUIET, "alphabetic", false);
+  inkText(String(high), W - SCORE_MARGIN, SCORE_NUM_Y, SCORE_PX, 700, BARLOW, bc, "alphabetic", true);
+  inkText("best", W - SCORE_MARGIN, SCORE_LAB_Y, LAB_PX, 500, FREDOKA, bc, "middle", true);
+  if (scene !== SC.OVER) dots(SCORE_MARGIN, SCORE_LAB_Y, QUIET);
+
+  for (const s of statics) drawBall(s.x, s.y, s.r, s.type, s.hits);
+
+  if (ball) {
+    const bx = lerp(ball.px, ball.x, alphaT), by = lerp(ball.py, ball.y, alphaT);
+    drawBall(bx, by, lerp(ball.pr, ball.r, alphaT), ball.type, 2,
+             lerp(ball.pspin, ball.spin, alphaT));
+    if (ball.state === "aim") {
+      ctx.save();
+      ctx.translate(bx, by);
+      ctx.rotate(lerp(prevAim, aimAngle, alphaT));
+      ctx.globalAlpha = (aiming || locked) ? 1 : 0.45;
+      drawArrow();
+      ctx.restore();
+    }
+  }
+
+  for (const p of pts) {
+    ctx.save();
+    ctx.globalAlpha = Math.max(0, 1 - p.t/0.9);
+    label("+" + p.n, Math.min(W - 16, Math.max(16, p.x)), p.y, 20, "#00ff00", "center", 600);
+    ctx.restore();
+  }
+
+}
+
+function drawOver(){
+  drawGame();
+  ctx.save();
+  ctx.fillStyle = "rgba(0,0,0," + (0.91 + overFlash*0.06) + ")";
+  ctx.fillRect(0, 0, W, H);
+  ctx.restore();
+  slotLabel("over.heading", "A", "game\nover", 35, -3.3, 0.80);
+  ring(SLOT.B.x, SLOT.B.fy, SLOT.B.r, SLOT.B.r * RING_K);
+  drawNumberMid(score, SLOT.B.x, SLOT.B.fy, 58, "center");
+  drawMenu();
+}
+
+/* Bottom right, the side the original used, with the subtitle centred on the
+   mark rather than hung off its right edge. The mark is set right-aligned, so
+   its centre has to be measured rather than assumed. */
+/* The subtitle is set to whatever size makes its ink exactly as wide as the
+   mark's, so the two lines square off into a block instead of one word floating
+   under another. Measured off the ink rather than the advance box, because the
+   two are set at different sizes and weights and their side bearings do not
+   scale together. */
+let TM = null, TMfixed = false;
+function inkW(text, px, weight){
+  ctx.font = weight + " " + px + "px " + FREDOKA;
+  ctx.textAlign = "left";
+  const m = ctx.measureText(text);
+  return { w: m.actualBoundingBoxLeft + m.actualBoundingBoxRight, l: m.actualBoundingBoxLeft };
+}
+function titleM(){
+  if (TM && TMfixed) return TM;
+  const mark = inkW("frict", TITLE_PX, 600);
+  const sub  = inkW(SUBTITLE, 100, 400);
+  let px     = sub.w > 0 ? 100 * mark.w / sub.w : 12;
+  /* Glyph widths are not quite linear in the size, so the first guess lands
+     about a percent out. One correction pass at the chosen size closes it. */
+  const at = inkW(SUBTITLE, px, 400);
+  if (at.w > 0) px *= mark.w / at.w;
+  /* Right-aligned, so the mark's ink ends at TITLE_R and starts a width back. */
+  const x0   = TITLE_R - mark.w;
+  const y    = TITLE_Y + TITLE_PX * TITLE_CAP + SUB_GAP + px * TITLE_CAP;
+  TM = { px: px, y: y, x0: x0,
+         mid: ((TITLE_Y - TITLE_PX * TITLE_CAP) + (y + px * TITLE_CAP)) / 2 };
+  try { TMfixed = document.fonts.check('600 ' + TITLE_PX + 'px "Fredoka"'); } catch(e){}
+  return TM;
+}
+function titleBlock(){
+  const m = titleM();
+  const om = layOf("title.mark") || {}, os = layOf("title.sub") || {};
+  label("frict", TITLE_R + (om.dx || 0), TITLE_Y + (om.dy || 0),
+        om.fs || TITLE_PX, "#00ff00", "right", 600);
+  /* The quiet green the rule, the dashed line and the score use. It used to be
+     that colour at 55% over black, which is a step darker again and read as a
+     different, muddier green. */
+  inkText(SUBTITLE, m.x0 + (os.dx || 0), m.y + (os.dy || 0), os.fs || m.px,
+          400, FREDOKA, HUSH, "middle", false);
+}
+/* A build stamp, bottom left of the title screen and nowhere else. It exists so
+   a phone can be checked at a glance against the build that was sent, which a
+   home screen app otherwise gives no way to do. Tick the letter on every build
+   that goes out. */
+const VERSION = "v 0.2b";
+const VER_PX = 13, VER_X = 12, VER_Y = H - 18;
+function versionStamp(){
+  const o = layOf("menu.version") || {};
+  inkText(VERSION, VER_X + (o.dx || 0), VER_Y + (o.dy || 0), o.fs || VER_PX,
+          300, BARLOW, QUIET, "alphabetic", false);
+}
+function drawTitle(){
+  drawMenu();
+  titleBlock();
+  versionStamp();
+}
+
+/* ------------------------------------------------- the tutorial's field */
+/* The steps that show a shot draw a short playfield: the same rule the real one
+   has across the top, in the same place on every step, and the real dashed line
+   at the bottom. Between them there is room for a ball to travel. */
+const TUT_RULE = 271;
+const TUT_MID  = "#00b500";      // between the live green and the quiet one
+/* The same choice the field makes, so a tutorial screen shows the boundary the
+   way the player has it set: the whole box with its corners when the edges are
+   on, a plain rule across when they are off. */
+function tutBox(){
+  if (wallsOn) edgeBox(TUT_RULE);
+  else { ctx.fillStyle = "#007f00"; ctx.fillRect(0, TUT_RULE, W, hair()); }
+}
+/* The size a ball at rest will grow to. Round ends, so the dashes read as one
+   circle rather than a row of tiles. */
+function growRing(x, y, r){
+  ctx.save();
+  ctx.strokeStyle = TUT_MID; ctx.lineWidth = 2; ctx.lineCap = "round";
+  /* A round cap adds half the stroke at each end, so the dash is set that much
+     shorter than the 6.3 it should read as. */
+  ctx.setLineDash([4.3, 7.9]);
+  ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI*2); ctx.stroke();
+  ctx.restore();
+}
+/* A path a ball could have taken, as dots rather than a line, held clear of
+   whatever sits at each end of it. */
+function dotPath(pts, clipStart, clipEnd){
+  const PITCH = 11.8, DOT = 1.5;
+  const a = pts[0], z = pts[pts.length-1];
+  ctx.fillStyle = TUT_MID;
+  let carry = 0;
+  for (let i = 0; i < pts.length - 1; i++) {
+    const p = pts[i], q = pts[i+1];
+    const dx = q[0]-p[0], dy = q[1]-p[1], len = Math.hypot(dx, dy);
+    for (let s = carry; s < len; s += PITCH) {
+      const x = p[0] + dx*s/len, y = p[1] + dy*s/len;
+      if (Math.hypot(x-a[0], y-a[1]) < clipStart) continue;
+      if (Math.hypot(x-z[0], y-z[1]) < clipEnd) continue;
+      ctx.beginPath(); ctx.arc(x, y, DOT, 0, Math.PI*2); ctx.fill();
+    }
+    carry = PITCH - ((len - carry) % PITCH);
+  }
+}
+/* Where the first shot ended up on the size step, and how big it grew. Both
+   steps below are drawn from these, so the second picks up exactly where the
+   first left off. */
+const REST1 = { x: 98.3, y: 324 };
+/* The gap from that ball's centre up to the underside of the rule, which is how
+   big it grew. A ball drawn at radius r has its outer edge exactly at r, so this
+   is the number drawBall wants. The dashed ring on the size step is stroked, and
+   a stroke straddles its path, so that one is drawn a half-stroke smaller to
+   put its outer edge in the same place. */
+const GROWN1 = REST1.y - (TUT_RULE + 1);
+function drawTut(){
+  const t = TUT_TEXT[tutStep];
+  /* The original set these in caps; everything else in this game is lowercase. */
+  label(t[0].toLowerCase(), 24, V(54), 24, "#00ff00", "left", 600);
+  let y = V(88);
+  for (const para of t[1]) y = body(para, 24, y, 18, 272) + 10;
+
+  if (tutStep === 1) {
+    /* Same dashed line and same launch point the playfield uses, so the
+       illustration and the real thing sit at identical heights. */
+    tutBox();
+    baseline();
+    const ly = launchY();
+    ctx.save(); ctx.translate(160, ly); ctx.rotate(-0.35); drawArrow(); ctx.restore();
+    drawBall(160, ly, SHOT_R, "normal", 2);
+  } else if (tutStep === 2) {
+    /* One shot: off the left wall, to rest below the rule, and the dashed ring
+       is the size it will reach. The bounce is a true reflection, worked out
+       from the two ends rather than drawn by eye, and the ring's radius is the
+       gap up to the rule, so it stops at the wall by construction. */
+    tutBox(); baseline();
+    const by = 447;
+    dotPath([[160, launchY()], [FIELD_L, by], [REST1.x, REST1.y]], SHOT_R + 6, GROWN1 + 7);
+    growRing(REST1.x, REST1.y, GROWN1 - 1);
+    drawBall(REST1.x, REST1.y, 42, "normal", 2);
+    drawBall(160, launchY(), SHOT_R, "normal", 2);
+  } else if (tutStep === 3) {
+    /* The next shot goes almost straight up, clips that ball on its lower right
+       and turns 116 degrees, which is the incoming direction reflected about
+       the normal at the contact. It rolls out to the right and grows until it
+       meets the wall, so its radius is simply the gap it has left. */
+    tutBox(); baseline();
+    const hit = [137.4, 375.9], rest = [274.4, 428.0];
+    const R2 = FIELD_R - rest[0];
+    dotPath([[160, launchY()], hit, rest], SHOT_R + 6, R2 + 3);
+    drawBall(160, launchY(), SHOT_R, "normal", 2);
+    drawBall(REST1.x, REST1.y, GROWN1, "normal", 1);
+    drawBall(rest[0], rest[1], R2, "normal", 2);
+    inkLabel("1 hit left", REST1.x, REST1.y, 16, "#00ff00", 500);
+    inkLabel("2 hits\nleft", rest[0], rest[1], 16, "#000000", 500, 0.95);
+  } else if (tutStep === 4) {
+    /* Labels flush left to one another, the whole block centred on the screen.
+       Vertically it sits in the middle of whatever the text leaves above the
+       two buttons, worked out from both rather than pinned to a height, so it
+       stays centred if the wording ever changes. */
+    const rows = ["double","triple","razor"];
+    const br = 17, bigR = br * RAZOR_SCALE, gap = 13;
+    const pitch = V(42);
+    const blockH = 2*pitch + br + bigR;
+    /* The ink of the last line, not the bottom of its line box, which sits a
+       descender lower than anything actually drawn. */
+    ctx.font = BODYWT + " 18px " + BARLOW; ctx.textBaseline = "top";
+    const textBot = (y - 10 - 18*1.42) + ctx.measureText("Rgy").actualBoundingBoxDescent;
+    const band = (textBot + (V(440) - 26)) / 2;
+    const rowTop = band - blockH/2 + br;
+    ctx.font = "500 15px " + FREDOKA;
+    let tw = 0;
+    for (let i=0;i<3;i++) tw = Math.max(tw, ctx.measureText(rows[i]).width);
+    const gx = 160 - (bigR*2 + gap + tw)/2 + bigR;
+    const tx = gx + bigR + gap;
+    for (let i=0;i<3;i++){
+      const yy = rowTop + i*pitch;
+      drawBall(gx, yy, rows[i] === "razor" ? bigR : br, rows[i], 2);
+      label(rows[i], tx, yy, 15, "#00ff00", "left", 500);
+    }
+  } else {
+    drawBall(160, V(322), 46, "normal", 2);
+  }
+  drawMenu();
+}
+
+/* The mark does not move when you come in here. It stays in the bottom right
+   corner it occupies on the menu, at the same size, so the screen reads as the
+   menu with its buttons swapped for text rather than as a new page. */
+function drawAbout(){
+  titleBlock();
+  /* Higher than the middle of the space above the wordmark. A block of text
+     centred by measurement in a tall empty field reads as having sunk. */
+  let y = V(118);
+  y = body("Frict was originally created by Joris Truyen and released on the iOS App Store in the late 2000's.", 30, y, 16, 260) + 14;
+  body("This version is a fan reconstruction and update of the original game, based on fond memories and tuned for modern phones.", 30, y, 16, 260);
+  drawMenu();
+}
+
+function drawHiscore(){
+  titleBlock();
+  slotLabel("hiscore.heading", "A", "high\nscore", 32, -6.5, 0.80);
+  ring(SLOT.B.x, SLOT.B.fy, SLOT.B.r, SLOT.B.r * RING_K);
+  drawNumberMid(high, SLOT.B.x, SLOT.B.fy, 58, "center");
+  drawMenu();
+}
+
+/* The heading is the filled circle, the way the original had it, and the speaker
+   says whether sound is on without needing a caption under it. */
+function drawSettings(){
+  titleBlock();
+  slotLabel("settings.heading", "C", "settings", 27, -6.1);
+  drawMenu();
+}
+
+function drawPlayMenu(){
+  /* A ring rather than a disc, so it reads as the heading and not a button. */
+  drawButton(slot("A", { id:"play.heading", fs:48, rot:-4.8, label:"play!" }));
+  drawMenu();
+}
+function scrim(a){
+  ctx.save();
+  ctx.fillStyle = "rgba(0,0,0," + a + ")";
+  ctx.fillRect(0, 0, W, H);
+  ctx.restore();
+}
+/* Over the field rather than instead of it, so the round you are coming back to
+   is still there behind the buttons. The heading is a ring, not a disc: it is a
+   word, not something to press. */
+function drawPause(){
+  drawGame();
+  scrim(0.88);
+  drawButton(slot("A", { id:"pause.heading", fs:36, rot:-3.6, label:"pause" }));
+  drawMenu();
+}
+function drawConfirm(){
+  if (askOverField) { drawGame(); scrim(0.88); }
+  slotLabel(askId, "B", askText, askFs, askRot, 0.86);
+  drawMenu();
+}
+
+function render(){
+  ctx.setTransform(q, 0, 0, q, 0, 0);
+  ctx.clearRect(0, 0, W, H);
+  ctx.fillStyle = "#000000";
+  ctx.fillRect(0, 0, W, H);
+  if      (scene === SC.GAME)     drawGame();
+  else if (scene === SC.OVER)     drawOver();
+  else if (scene === SC.TUT)      drawTut();
+  else if (scene === SC.ABOUT)    drawAbout();
+  else if (scene === SC.HISCORE)  drawHiscore();
+  else if (scene === SC.SETTINGS) drawSettings();
+  else if (scene === SC.PLAYMENU) drawPlayMenu();
+  else if (scene === SC.CONFIRM)  drawConfirm();
+  else if (scene === SC.PAUSE)    drawPause();
+  else                            drawTitle();
+  drawDbg();
+}
+
+/* Fixed timestep. A 13 mini drives the display at 60Hz and a 17 Pro at 120Hz;
+   stepping a constant 1/120s makes both simulate exactly the same game. */
+const DBG = /[?&]debug/.test(location.search);
+const dbg = { t:[], steps:[0,0,0,0,0,0], line:"", line2:"", worst:0, hitches:0 };
+function dbgSample(ms, n){
+  if (!DBG) return;
+  dbg.t.push(ms); dbg.steps[Math.min(5, n)]++;
+  if (ms > dbg.worst) dbg.worst = ms;
+  if (dbg.t.length < 60) return;
+  const a = dbg.t.slice().sort(function(x,y){ return x-y; });
+  const pc = function(k){ return a[Math.floor(a.length*k)]; };
+  const over = dbg.t.filter(function(x){ return x > 20; }).length;
+  if (dbg.worst > 40) dbg.hitches++;
+  dbg.line = "fps " + Math.round(1000/pc(0.5)) + "  p50 " + pc(0.5).toFixed(1) +
+             "  p95 " + pc(0.95).toFixed(1) + "  max " + dbg.worst.toFixed(0) +
+             "  >20ms " + Math.round(100*over/dbg.t.length) + "%  hitch " + dbg.hitches;
+  const r = cvs.getBoundingClientRect(), dp = window.devicePixelRatio || 1;
+  const rw = rotated() ? r.height : r.width, rh = rotated() ? r.width : r.height;
+  const exact = Math.abs(rw*dp - cvs.width) < 0.6 && Math.abs(rh*dp - cvs.height) < 0.6;
+  dbg.line2 = "dpr " + dp + "  css " + rw.toFixed(2) + "x" + rh.toFixed(2) +
+              "  buf " + cvs.width + "x" + cvs.height + (exact ? "  1:1" : "  RESAMPLED");
+  dbg.t = []; dbg.steps = [0,0,0,0,0,0]; dbg.worst = 0;
+}
+function drawDbg(){
+  if (!DBG || !dbg.line) return;
+  ctx.save();
+  ctx.fillStyle = "rgba(0,0,0,.75)"; ctx.fillRect(0, 0, W, 34);
+  ctx.font = "500 9px monospace"; ctx.textAlign = "left"; ctx.textBaseline = "top";
+  ctx.fillStyle = "#00ff00";
+  ctx.fillText(dbg.line, 5, 6); ctx.fillText(dbg.line2, 5, 19);
+  ctx.restore();
+}
+
+const STEP = 1/120;
+let last = 0, acc = 0;
+function frame(ts){
+  let dt = last ? (ts - last)/1000 : STEP;
+  last = ts;
+  /* Cap catch-up at three frames. If something stalls the main thread the
+     simulation loses that time rather than teleporting through it. */
+  if (dt > 0.05) dt = 0.05;
+  acc += dt;
+  let guard = 0, nsteps = 0;
+  while (acc >= STEP && guard++ < 60) { stepWorld(STEP); acc -= STEP; nsteps++; }
+  dbgSample(dt * 1000, nsteps);
+  /* Whatever is left in the accumulator is how far past the last physics step
+     this frame sits. Drawing at that fraction between the previous and current
+     state is what keeps motion smooth when the display's cadence is not an
+     exact multiple of the step, which is the normal case on real hardware. */
+  alphaT = Math.max(0, Math.min(1, acc / STEP));
+  render();
+  requestAnimationFrame(frame);
+}
+
+/* ---------------------------------------------------------------- boot */
+function start(saved){
+  if (saved && typeof saved.high === "number" && saved.high > high) high = saved.high;
+  /* Measure first. This used to restore the saved game against the default
+     height of 693 and only then discover the real one, which is why a resumed
+     ball and arrow turned up in the wrong place. */
+  remeasure();
+  loadGame();
+  /* A face used only by canvas fillText is not always fetched, because nothing
+     in the DOM references it. Ask for it explicitly. */
+  if (document.fonts && document.fonts.load) {
+    document.fonts.load('700 42px "Barlow"');
+    document.fonts.load('400 18px "Barlow"');
+    document.fonts.load('300 13px "Barlow"');
+    document.fonts.load('600 40px "Fredoka"');
+  }
+  requestAnimationFrame(frame);
+}
+if (window.claude && window.claude.hot && window.claude.hot.snapshot) {
+  window.claude.hot.snapshot(function(){ return { high: high }; });
+}
+if (window.claude && window.claude.hot && window.claude.hot.ready) window.claude.hot.ready(start);
+else start((window.claude && window.claude.hot && window.claude.hot.data) || {});
+
+})();
+
+</script>
+</body>
+</html>
