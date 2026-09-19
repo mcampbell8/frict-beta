@@ -115,7 +115,7 @@
     var mode = ["standalone","fullscreen","minimal-ui","browser"].filter(function(m){
       return matchMedia("(display-mode:" + m + ")").matches; }).join(",") || "none";
     panel.textContent = [
-      "build    0.2l translucent",
+      "build    0.2m translucent",
       "inner    " + window.innerWidth + " x " + window.innerHeight,
       "screen   " + screen.width + " x " + screen.height,
       "avail    " + screen.availWidth + " x " + screen.availHeight,
@@ -893,6 +893,8 @@ function menuHit(p){
   return null;
 }
 function press(p){
+  if (DBG && p) dbg.lastPress = "tap  x " + p.x.toFixed(1) + "  y " + p.y.toFixed(1) +
+    "  rot " + rotDir() + "  turned " + rotated();
   audioInit(); if (actx && actx.state === "suspended") actx.resume();
   if (scene === SC.GAME) {
     /* The one thing on the field that is a button rather than somewhere to aim
@@ -1604,7 +1606,7 @@ function titleBlock(){
    a phone can be checked at a glance against the build that was sent, which a
    home screen app otherwise gives no way to do. Tick the letter on every build
    that goes out. */
-const VERSION = "v 0.2l";
+const VERSION = "v 0.2m";
 const VER_PX = 13, VER_X = 12, VER_Y = H - 18;
 function versionStamp(){
   const o = layOf("menu.version") || {};
@@ -1840,10 +1842,11 @@ function dbgSample(ms, n){
 function drawDbg(){
   if (!DBG || !dbg.line) return;
   ctx.save();
-  ctx.fillStyle = "rgba(0,0,0,.75)"; ctx.fillRect(0, 0, W, 34);
+  ctx.fillStyle = "rgba(0,0,0,.75)"; ctx.fillRect(0, TOP, W, dbg.lastPress ? 47 : 34);
   ctx.font = "500 9px monospace"; ctx.textAlign = "left"; ctx.textBaseline = "top";
   ctx.fillStyle = "#00ff00";
-  ctx.fillText(dbg.line, 5, 6); ctx.fillText(dbg.line2, 5, 19);
+  ctx.fillText(dbg.line, 5, TOP + 6); ctx.fillText(dbg.line2, 5, TOP + 19);
+  if (dbg.lastPress) ctx.fillText(dbg.lastPress, 5, TOP + 32);
   ctx.restore();
 }
 
