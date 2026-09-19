@@ -9,8 +9,7 @@
 <meta http-equiv="Cache-Control" content="no-store">
 <meta name="apple-mobile-web-app-title" content="Frict">
 <meta name="theme-color" content="#000000">
-<!-- manifest link disabled for 0.2d, testing whether it is overriding the translucent status bar setting -->
-<!-- <link rel="manifest" href="manifest.json"> -->
+<link rel="manifest" href="manifest.json">
 <link rel="apple-touch-icon" href="icon-192.png">
 <title>Frict</title>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fredoka:wght@400;500;600;700&family=Barlow:wght@300;400;700&display=swap">
@@ -78,8 +77,18 @@
   /* The element is rotated a quarter turn in landscape, so its own width runs
      down the screen's height. Measure the viewport, then hand the two numbers
      over in whichever order this orientation wants them. */
+  /* iOS 26 has a standalone-mode bug where window.innerHeight already has the
+     top safe area's height subtracted out once, the normal and correct amount,
+     and then subtracts it a second time by mistake. That second subtraction is
+     never reflected in the safe area number itself, so it can't be detected by
+     comparing the two; it just quietly shortens the screen. The workaround is
+     to measure the top strip directly through this probe element, which reads
+     it a different way, and add that amount back onto the height fit() uses. */
+  function topInset(){
+    return parseFloat(getComputedStyle(probe).paddingTop) || 0;
+  }
   function fit(){
-    var w = window.innerWidth, h = window.innerHeight, t = turned.matches;
+    var w = window.innerWidth, h = window.innerHeight + topInset(), t = turned.matches;
     scr.style.width  = (t ? h : w) + "px";
     scr.style.height = (t ? w : h) + "px";
     if (panel.style.display === "block") report();
@@ -106,7 +115,7 @@
     var mode = ["standalone","fullscreen","minimal-ui","browser"].filter(function(m){
       return matchMedia("(display-mode:" + m + ")").matches; }).join(",") || "none";
     panel.textContent = [
-      "build    0.2d translucent",
+      "build    0.2e translucent",
       "inner    " + window.innerWidth + " x " + window.innerHeight,
       "screen   " + screen.width + " x " + screen.height,
       "avail    " + screen.availWidth + " x " + screen.availHeight,
@@ -1588,7 +1597,7 @@ function titleBlock(){
    a phone can be checked at a glance against the build that was sent, which a
    home screen app otherwise gives no way to do. Tick the letter on every build
    that goes out. */
-const VERSION = "v 0.2d";
+const VERSION = "v 0.2e";
 const VER_PX = 13, VER_X = 12, VER_Y = H - 18;
 function versionStamp(){
   const o = layOf("menu.version") || {};
