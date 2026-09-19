@@ -61,7 +61,7 @@
              env(safe-area-inset-bottom) env(safe-area-inset-left);
      visibility:hidden;pointer-events:none"></div>
 <div id="corner" style="position:fixed;top:calc(env(safe-area-inset-top) + 24px);right:0;
-     width:72px;height:72px;z-index:9;background:transparent;touch-action:manipulation;
+     width:72px;height:72px;z-index:9;background:rgba(255,0,0,.35);touch-action:manipulation;
      user-select:none;-webkit-user-select:none;-webkit-touch-callout:none"></div>
 <pre id="vpread" style="position:fixed;top:0;left:0;right:0;z-index:10;margin:0;
      display:none;padding:56px 10px 10px;background:rgba(0,0,0,.92);color:#00d000;
@@ -105,7 +105,7 @@
     var mode = ["standalone","fullscreen","minimal-ui","browser"].filter(function(m){
       return matchMedia("(display-mode:" + m + ")").matches; }).join(",") || "none";
     panel.textContent = [
-      "build    0.2b translucent",
+      "build    0.2c translucent",
       "inner    " + window.innerWidth + " x " + window.innerHeight,
       "screen   " + screen.width + " x " + screen.height,
       "avail    " + screen.availWidth + " x " + screen.availHeight,
@@ -1587,7 +1587,7 @@ function titleBlock(){
    a phone can be checked at a glance against the build that was sent, which a
    home screen app otherwise gives no way to do. Tick the letter on every build
    that goes out. */
-const VERSION = "v 0.2b";
+const VERSION = "v 0.2c";
 const VER_PX = 13, VER_X = 12, VER_Y = H - 18;
 function versionStamp(){
   const o = layOf("menu.version") || {};
