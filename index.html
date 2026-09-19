@@ -9,7 +9,8 @@
 <meta http-equiv="Cache-Control" content="no-store">
 <meta name="apple-mobile-web-app-title" content="Frict">
 <meta name="theme-color" content="#000000">
-<link rel="manifest" href="manifest.json">
+<!-- manifest link disabled for 0.2d, testing whether it is overriding the translucent status bar setting -->
+<!-- <link rel="manifest" href="manifest.json"> -->
 <link rel="apple-touch-icon" href="icon-192.png">
 <title>Frict</title>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fredoka:wght@400;500;600;700&family=Barlow:wght@300;400;700&display=swap">
@@ -105,7 +106,7 @@
     var mode = ["standalone","fullscreen","minimal-ui","browser"].filter(function(m){
       return matchMedia("(display-mode:" + m + ")").matches; }).join(",") || "none";
     panel.textContent = [
-      "build    0.2c translucent",
+      "build    0.2d translucent",
       "inner    " + window.innerWidth + " x " + window.innerHeight,
       "screen   " + screen.width + " x " + screen.height,
       "avail    " + screen.availWidth + " x " + screen.availHeight,
@@ -1587,7 +1588,7 @@ function titleBlock(){
    a phone can be checked at a glance against the build that was sent, which a
    home screen app otherwise gives no way to do. Tick the letter on every build
    that goes out. */
-const VERSION = "v 0.2c";
+const VERSION = "v 0.2d";
 const VER_PX = 13, VER_X = 12, VER_Y = H - 18;
 function versionStamp(){
   const o = layOf("menu.version") || {};
