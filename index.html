@@ -115,7 +115,7 @@
     var mode = ["standalone","fullscreen","minimal-ui","browser"].filter(function(m){
       return matchMedia("(display-mode:" + m + ")").matches; }).join(",") || "none";
     panel.textContent = [
-      "build    0.2e translucent",
+      "build    0.2f translucent",
       "inner    " + window.innerWidth + " x " + window.innerHeight,
       "screen   " + screen.width + " x " + screen.height,
       "avail    " + screen.availWidth + " x " + screen.availHeight,
@@ -162,9 +162,16 @@
     e.preventDefault(); e.stopPropagation(); panel.style.display = "none";
   }, true);
 
-  fit();
+  function fitSettled(){
+    fit();
+    requestAnimationFrame(fit);
+    setTimeout(fit, 60);
+    setTimeout(fit, 320);
+  }
+  fitSettled();
   addEventListener("resize", fit);
-  addEventListener("orientationchange", function(){ setTimeout(fit, 60); setTimeout(fit, 400); });
+  addEventListener("orientationchange", fitSettled);
+  if (window.visualViewport) window.visualViewport.addEventListener("resize", fit);
   if (turned.addEventListener) turned.addEventListener("change", fit);
 })();
 </script>
@@ -1597,7 +1604,7 @@ function titleBlock(){
    a phone can be checked at a glance against the build that was sent, which a
    home screen app otherwise gives no way to do. Tick the letter on every build
    that goes out. */
-const VERSION = "v 0.2e";
+const VERSION = "v 0.2f";
 const VER_PX = 13, VER_X = 12, VER_Y = H - 18;
 function versionStamp(){
   const o = layOf("menu.version") || {};
