@@ -115,7 +115,7 @@
     var mode = ["standalone","fullscreen","minimal-ui","browser"].filter(function(m){
       return matchMedia("(display-mode:" + m + ")").matches; }).join(",") || "none";
     panel.textContent = [
-      "build    0.2i translucent",
+      "build    0.2k translucent",
       "inner    " + window.innerWidth + " x " + window.innerHeight,
       "screen   " + screen.width + " x " + screen.height,
       "avail    " + screen.availWidth + " x " + screen.availHeight,
@@ -235,7 +235,7 @@ const FIELD_L = SIDE, FIELD_R = W - SIDE;
 const RAZOR_SCALE = 1.1;         // the blade is 20% wider than a plain ball
 const SHOT_R = 14;               // fixed; no longer a dial
 const SCORE_PX = 37;             // foot score size
-const SCORE_BASE = 26;           // its baseline, measured up from the bottom
+const SCORE_BASE = 45;           // its baseline, measured up from the bottom
 const ARROW_GAP = 5;             // clear air between the ball and the arrow tail                  // notch clearance: 50pt on a 13 mini, 59pt on a Dynamic Island phone
 /* Calibration, fixed. These are the values arrived at by hand; the tuning
    panel that produced them is not part of this build. The dashed line and the
@@ -588,7 +588,7 @@ function slotLabel(id, k, text, fs, rot, lh){
 /* The wordmark, bottom right, the side the original used. It is the same block
    in the same place on every screen that carries it, so it has to be settled
    here, before the menus that line themselves up with it. */
-const TITLE_R = 294, TITLE_Y = 612, TITLE_PX = 54;
+const TITLE_R = 265, TITLE_Y = 560, TITLE_PX = 54;
 const SUBTITLE = "forever";
 const SUB_GAP = 6;               // between the mark's ink and the subtitle's
 /* Both lines are set on their middles, so the ink of a line runs from about a
@@ -1604,7 +1604,7 @@ function titleBlock(){
    a phone can be checked at a glance against the build that was sent, which a
    home screen app otherwise gives no way to do. Tick the letter on every build
    that goes out. */
-const VERSION = "v 0.2i";
+const VERSION = "v 0.2k";
 const VER_PX = 13, VER_X = 12, VER_Y = H - 18;
 function versionStamp(){
   const o = layOf("menu.version") || {};
