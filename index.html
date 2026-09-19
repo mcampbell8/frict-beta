@@ -30,6 +30,7 @@
      texture at a scale of its choosing and stretch it, and that is a soft canvas
      the page cannot measure its way out of. A canvas gets its own layer anyway. */
   .screen canvas{display:block;touch-action:none;cursor:pointer;
+    margin-top:-1px;
     user-select:none;-webkit-user-select:none;-webkit-touch-callout:none}
   .screen canvas:focus{outline:none}
   /* Portrait lock. Android obeys the manifest and never reaches this. iOS gives
@@ -115,7 +116,7 @@
     var mode = ["standalone","fullscreen","minimal-ui","browser"].filter(function(m){
       return matchMedia("(display-mode:" + m + ")").matches; }).join(",") || "none";
     panel.textContent = [
-      "build    0.2f translucent",
+      "build    0.2g translucent",
       "inner    " + window.innerWidth + " x " + window.innerHeight,
       "screen   " + screen.width + " x " + screen.height,
       "avail    " + screen.availWidth + " x " + screen.availHeight,
@@ -1604,7 +1605,7 @@ function titleBlock(){
    a phone can be checked at a glance against the build that was sent, which a
    home screen app otherwise gives no way to do. Tick the letter on every build
    that goes out. */
-const VERSION = "v 0.2f";
+const VERSION = "v 0.2g";
 const VER_PX = 13, VER_X = 12, VER_Y = H - 18;
 function versionStamp(){
   const o = layOf("menu.version") || {};
